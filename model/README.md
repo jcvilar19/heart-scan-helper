@@ -2,15 +2,39 @@
 
 FastAPI service used by the web UI: `POST /predict` (multipart field `image`) and `GET /health`.
 
+## Where the model file goes (workspace folder)
+
+Put checkpoint files **inside this folder** in your clone (they are **not** in Git by default):
+
+```
+<repo-root>/model/
+```
+
+| File | Purpose |
+|------|---------|
+| **`model7_bundle.pth`** | Recommended: full bundle exported from `Model7.ipynb` (or dev placeholder; see below). |
+| `model3_bundle.pth` | Legacy Model3 bundle. |
+| `best_model.pth` | Weights-only export; requires `model7_meta.json` (see Option B). |
+
+**Absolute path example (Windows):**
+
+`C:\Users\miqi\Desktop\med-image-clarity\med-image-clarity\model\model7_bundle.pth`
+
+The inference code (`predict.py`) looks for checkpoints in `model/` in this order unless you override with env vars (see below).
+
+### Git / GitHub
+
+Files matching `model/*.pth` are listed in **`.gitignore`**: they stay on your disk for local runs but are **not pushed** to the remote (large binaries). The repo ships **`model/create_dev_bundle.py`** so anyone can generate a local placeholder.
+
 ## Development placeholder weights
 
-If you do not have a trained bundle yet, generate a local `model7_bundle.pth` (ImageNet backbone + random head, **not clinically valid**):
+If you do not have a trained bundle yet, generate **`model/model7_bundle.pth`** locally (ImageNet backbone + freshly initialized classifier head — **not clinically valid**, only so `uvicorn` and the UI can call `/predict`):
 
 ```bash
 py model/create_dev_bundle.py
 ```
 
-Weights under `model/*.pth` are gitignored so they are not pushed to GitHub.
+From the repository root, after `npm install` / `pip install` as needed. **Replace** this file with your real `model7_bundle.pth` from `Model7.ipynb` when you have it.
 
 The loader prefers **Model7** artifacts when present, then falls back to Model3.
 
