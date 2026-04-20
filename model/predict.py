@@ -56,19 +56,20 @@ def _resolve_checkpoint_path() -> Path:
                 return p
             raise FileNotFoundError(f"Checkpoint path from {key} does not exist: {p}")
 
+    # Model7.ipynb saves `best_model.pth` (state_dict only). `model7_meta.json` must live in model/.
     for candidate in (
+        APP_DIR / "best_model.pth",
         APP_DIR / "model7_bundle.pth",
         APP_DIR / "model3_bundle.pth",
-        APP_DIR / "best_model.pth",
     ):
         if candidate.exists():
             return candidate
 
     raise FileNotFoundError(
-        "No model weights found. Place one of:\n"
-        "  - model/model7_bundle.pth (recommended; export from Model7.ipynb)\n"
-        "  - model/model3_bundle.pth\n"
-        "  - model/best_model.pth + model/model7_meta.json\n"
+        "No model weights found. For Model7 (notebook on Desktop → copied to model/Model7.ipynb):\n"
+        "  1) After training in Colab, copy best_model.pth into model/best_model.pth\n"
+        "  2) Keep model/model7_meta.json (stats + threshold from your run; edit if you retrain)\n"
+        "Optional: model/model7_bundle.pth (full torch.save dict) or model/model3_bundle.pth\n"
         "Or set MODEL_CHECKPOINT to a .pth file."
     )
 
@@ -250,13 +251,32 @@ class CardiomegalyInferenceService:
         return PredictResponse(prediction=prediction, confidence=confidence, heatmap_url=None)
 
 
-def create_app() -> FastAPI:
-    service = CardiomegalyInferenceService()
+_inference_svc: CardiomegalyInferenceService | None = None
+_inference_err: str | None = None
 
+
+def _get_inference_service() -> CardiomegalyInferenceService:
+    global _inference_svc, _inference_err
+    if _inference_err is not None:
+        raise HTTPException(status_code=503, detail=_inference_err)
+    if _inference_svc is not None:
+        return _inference_svc
+    try:
+        _inference_svc = CardiomegalyInferenceService()
+    except FileNotFoundError as exc:
+        _inference_err = str(exc)
+        raise HTTPException(status_code=503, detail=_inference_err) from exc
+    except Exception as exc:
+        _inference_err = f"Inference init failed: {exc}"
+        raise HTTPException(status_code=503, detail=_inference_err) from exc
+    return _inference_svc
+
+
+def create_app() -> FastAPI:
     app = FastAPI(
         title="Cardiomegaly predictor",
-        version="2.0.0",
-        description="Model7 / Model3 MobileNetV2 inference for the med-image-clarity UI.",
+        version="2.1.0",
+        description="Model7 (best_model.pth + model7_meta.json) or bundle checkpoints for med-image-clarity.",
     )
 
     app.add_middleware(
@@ -269,11 +289,15 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, str]:
+        try:
+            s = _get_inference_service()
+        except HTTPException as exc:
+            return {"status": "no_weights", "detail": str(exc.detail)}
         return {
             "status": "ok",
-            "checkpoint": service.checkpoint_path.name,
-            "model_version": service.model_version,
-            "tta": "on" if service.use_tta else "off",
+            "checkpoint": s.checkpoint_path.name,
+            "model_version": s.model_version,
+            "tta": "on" if s.use_tta else "off",
         }
 
     @app.post("/predict", response_model=PredictResponse)
@@ -283,6 +307,11 @@ def create_app() -> FastAPI:
                 status_code=400,
                 detail="Unsupported file type. Use JPG, PNG or WebP.",
             )
+
+        try:
+            service = _get_inference_service()
+        except HTTPException:
+            raise
 
         try:
             image_bytes = await image.read()

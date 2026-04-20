@@ -2,31 +2,30 @@
 
 Web app for AI-assisted chest X-ray screening, with optional Supabase auth/history and a local Python inference API.
 
-## Model weights (where they live)
+## Model weights (Model7)
 
-Trained PyTorch files **are not committed** to Git (they are large). They must live on your machine here:
+The training notebook lives in the repo as **`model/Model7.ipynb`**. Preprocessing and threshold for inference are in **`model/model7_meta.json`** (committed).
 
-| What | Path in this repo |
-|------|-------------------|
-| **Recommended (Model7)** | `model/model7_bundle.pth` |
-| Legacy Model3 | `model/model3_bundle.pth` |
-| Weights only + meta | `model/best_model.pth` + `model/model7_meta.json` |
+Trained weights **are not in Git** (large). Put Colab’s export here:
 
-Example on Windows:
+| What | Path |
+|------|------|
+| **Model7 weights (notebook default)** | `model/best_model.pth` |
+| Meta (stats + threshold) | `model/model7_meta.json` (already in repo; edit after retrain) |
+| Optional full bundle | `model/model7_bundle.pth` (local only) |
+| Legacy | `model/model3_bundle.pth` |
 
-`med-image-clarity\model\model7_bundle.pth`
+Example: `med-image-clarity\model\best_model.pth`
 
 ### Quick dev placeholder
-
-If you need a file so the API starts before you copy real weights from Colab:
 
 ```bash
 py model/create_dev_bundle.py
 ```
 
-That creates `model/model7_bundle.pth` locally (ImageNet backbone + untrained head — **not for clinical use**). Replace it with your real bundle from `Model7.ipynb` when ready.
+Creates **`model/best_model.pth`** locally (not clinically valid). Replace with your real **`best_model.pth`** from Colab.
 
-Full instructions, export cell, and API usage: **[model/README.md](model/README.md)**.
+Details: **[model/README.md](model/README.md)**.
 
 ## Web app
 

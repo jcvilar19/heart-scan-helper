@@ -1,11 +1,10 @@
 """
-Create model/model7_bundle.pth for local development.
+Create model/best_model.pth for local smoke tests (Model7 notebook format).
 
-This is NOT your trained Model7 from the notebook. It uses ImageNet-pretrained
-MobileNetV2 features with a freshly initialized classifier head so predict.py
-and uvicorn can start without you copying weights yet.
+Saves only state_dict (same as Model7.ipynb after training). Pair with the
+committed model/model7_meta.json or edit meta after your own Colab run.
 
-Replace this file with your real export from Model7.ipynb when available.
+This is NOT your real trained Model7 unless you replace weights from Colab.
 """
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ import torch.nn as nn
 from torchvision.models import MobileNet_V2_Weights, mobilenet_v2
 
 APP_DIR = Path(__file__).resolve().parent
-OUT = APP_DIR / "model7_bundle.pth"
+OUT = APP_DIR / "best_model.pth"
 
 
 def build_model(dropout: float = 0.2) -> nn.Module:
@@ -32,22 +31,10 @@ def build_model(dropout: float = 0.2) -> nn.Module:
 
 def main() -> None:
     model = build_model(0.2)
-    bundle = {
-        "model_state_dict": model.state_dict(),
-        "config": {
-            "img_size": 224,
-            "dropout": 0.2,
-            "use_dataset_stats": True,
-            "seed": 42,
-        },
-        "chosen_threshold": 0.5,
-        "train_gray_mean": 0.5,
-        "train_gray_std": 0.25,
-        "use_inference_tta": False,
-    }
-    torch.save(bundle, OUT)
-    print(f"Wrote dev placeholder bundle: {OUT}")
-    print("Replace with your trained model7_bundle.pth from Model7.ipynb for real predictions.")
+    torch.save(model.state_dict(), OUT)
+    print(f"Wrote dev weights (state_dict only): {OUT}")
+    print("Uses model/model7_meta.json for preprocessing + threshold.")
+    print("Replace OUT with your Colab best_model.pth for real Model7 predictions.")
 
 
 if __name__ == "__main__":

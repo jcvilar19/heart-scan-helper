@@ -1,97 +1,75 @@
 # Cardiomegaly inference (Model7 + Model3)
 
-FastAPI service used by the web UI: `POST /predict` (multipart field `image`) and `GET /health`.
+FastAPI: `POST /predict` (multipart field `image`) and `GET /health`.
 
-## Where the model file goes (workspace folder)
+## Model7 in this repo
 
-Put checkpoint files **inside this folder** in your clone (they are **not** in Git by default):
+- **`model/Model7.ipynb`** — copy of your training notebook (reference / re-run in Colab).
+- **`model/model7_meta.json`** — preprocessing + threshold aligned with a Colab run of that notebook (edit if you retrain).
+- **`model/best_model.pth`** — **not in Git** (too large). After training, copy Colab’s `best_model.pth` here, or generate a local dev file (below).
 
-```
-<repo-root>/model/
-```
+### Default checkpoint order (`predict.py`)
 
-| File | Purpose |
-|------|---------|
-| **`model7_bundle.pth`** | Recommended: full bundle exported from `Model7.ipynb` (or dev placeholder; see below). |
-| `model3_bundle.pth` | Legacy Model3 bundle. |
-| `best_model.pth` | Weights-only export; requires `model7_meta.json` (see Option B). |
+1. Environment override (first that is set and exists):  
+   `MODEL_CHECKPOINT`, `MODEL_BUNDLE_PATH`, `MODEL3_BUNDLE_PATH`, `MODEL7_BUNDLE_PATH`
+2. Otherwise the first file that exists under `model/`:
+   - **`best_model.pth`** (Model7 notebook export — **recommended**)
+   - `model7_bundle.pth` (optional full `torch.save` dict)
+   - `model3_bundle.pth` (legacy)
 
-**Absolute path example (Windows):**
+For `best_model.pth`, the server loads **`model/model7_meta.json`** (or `MODEL_META_PATH`, or `best_model_meta.json` next to the weights).
 
-`C:\Users\miqi\Desktop\med-image-clarity\med-image-clarity\model\model7_bundle.pth`
+### Git / large files
 
-The inference code (`predict.py`) looks for checkpoints in `model/` in this order unless you override with env vars (see below).
+`model/*.pth` is **gitignored**. Only the notebook, `model7_meta.json`, and scripts are versioned.
 
-### Git / GitHub
+### Dev placeholder (not clinically valid)
 
-Files matching `model/*.pth` are listed in **`.gitignore`**: they stay on your disk for local runs but are **not pushed** to the remote (large binaries). The repo ships **`model/create_dev_bundle.py`** so anyone can generate a local placeholder.
-
-## Development placeholder weights
-
-If you do not have a trained bundle yet, generate **`model/model7_bundle.pth`** locally (ImageNet backbone + freshly initialized classifier head — **not clinically valid**, only so `uvicorn` and the UI can call `/predict`):
+To create a local `best_model.pth` so the API runs before you copy Colab weights:
 
 ```bash
 py model/create_dev_bundle.py
 ```
 
-From the repository root, after `npm install` / `pip install` as needed. **Replace** this file with your real `model7_bundle.pth` from `Model7.ipynb` when you have it.
+That writes **`model/best_model.pth`** (state_dict only) using ImageNet backbone + random head. **Replace** it with your real Colab `best_model.pth` when you have it.
 
-The loader prefers **Model7** artifacts when present, then falls back to Model3.
+If no weights exist yet, `GET /health` returns `status: "no_weights"` and `POST /predict` returns **503** until a `.pth` is present.
 
-## Checkpoint resolution order
+---
 
-1. `MODEL_CHECKPOINT` or `MODEL_BUNDLE_PATH` or `MODEL7_BUNDLE_PATH` or `MODEL3_BUNDLE_PATH` (first set wins)
-2. Otherwise, the first existing file under `model/`:
-   - `model7_bundle.pth` (recommended for Model7)
-   - `model3_bundle.pth`
-   - `best_model.pth` (requires a meta JSON; see below)
+## Option A — Model7 as in the notebook (recommended)
 
-## Option A — Model7 full bundle (recommended)
-
-After training in `Model7.ipynb`, run a **new cell** once you have `train_mean`, `train_std`, and `best_threshold` (your notebook uses `best_threshold = thr_youden` after TTA):
+After training in Colab (`Model7.ipynb`), the notebook saves:
 
 ```python
-import torch, os, json
+torch.save(model.state_dict(), os.path.join(CFG.output_dir, "best_model.pth"))
+```
 
+1. Download **`best_model.pth`** from your Colab / Drive output folder.  
+2. Copy it to **`model/best_model.pth`** in this project.  
+3. Keep or edit **`model/model7_meta.json`** so `train_gray_mean`, `train_gray_std`, and `chosen_threshold` match **your** notebook printouts after TTA.
+
+---
+
+## Option B — Full bundle (optional)
+
+If you prefer a single file with weights + config inside:
+
+```python
 bundle = {
     "model_state_dict": model.state_dict(),
     "config": {k: v for k, v in CFG.__dict__.items() if isinstance(v, (int, float, bool, str))},
     "chosen_threshold": float(best_threshold),
     "train_gray_mean": float(train_mean),
     "train_gray_std": float(train_std),
-    "use_inference_tta": True,   # matches validation TTA; set False for faster CPU inference
+    "use_inference_tta": True,
 }
-
-out_path = os.path.join(CFG.output_dir, "model7_bundle.pth")
-torch.save(bundle, out_path)
-print("Saved:", out_path)
+torch.save(bundle, os.path.join(CFG.output_dir, "model7_bundle.pth"))
 ```
 
-Copy `model7_bundle.pth` into this repo folder:
+Save as **`model/model7_bundle.pth`** (still gitignored locally).
 
-- `model/model7_bundle.pth`
-
-## Option B — Notebook output `best_model.pth` + meta JSON
-
-The notebook saves weights only:
-
-```python
-torch.save(model.state_dict(), os.path.join(CFG.output_dir, "best_model.pth"))
-```
-
-Copy:
-
-- `best_model.pth` → `model/best_model.pth`
-- Create `model/model7_meta.json` (see `model/model7_meta.example.json`)
-
-Required meta fields:
-
-- `img_size`, `dropout`, `use_dataset_stats`
-- `train_gray_mean`, `train_gray_std` (from your notebook’s `estimate_gray_mean_std`)
-- `chosen_threshold` (e.g. `best_threshold` / `thr_youden` after TTA)
-- Optional: `use_inference_tta` (`true` to average the same 3 TTA crops as in the notebook)
-
-You can point to a custom meta path with `MODEL_META_PATH`.
+---
 
 ## Install and run
 
@@ -100,11 +78,11 @@ pip install -r model/requirements.txt
 uvicorn model.predict:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-`GET /health` returns `checkpoint`, `model_version` (`model7` | `model3` | `custom`), and whether TTA is on.
+`GET /health` returns `checkpoint`, `model_version`, `tta`, or `status: "no_weights"` if no `.pth` is found.
 
 ## Frontend
 
-In `.env` (local, not committed):
+In `.env` (local):
 
 ```env
 VITE_PREDICT_API_URL="http://localhost:8000"
@@ -119,5 +97,3 @@ VITE_PREDICT_API_URL="http://localhost:8000"
   "heatmap_url": null
 }
 ```
-
-`heatmap_url` is reserved for future Grad-CAM support.
