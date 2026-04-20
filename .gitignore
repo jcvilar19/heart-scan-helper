@@ -32,3 +32,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Trained weights (large); generate locally with model/create_dev_bundle.py
+model/*.pth

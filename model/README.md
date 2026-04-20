@@ -2,6 +2,16 @@
 
 FastAPI service used by the web UI: `POST /predict` (multipart field `image`) and `GET /health`.
 
+## Development placeholder weights
+
+If you do not have a trained bundle yet, generate a local `model7_bundle.pth` (ImageNet backbone + random head, **not clinically valid**):
+
+```bash
+py model/create_dev_bundle.py
+```
+
+Weights under `model/*.pth` are gitignored so they are not pushed to GitHub.
+
 The loader prefers **Model7** artifacts when present, then falls back to Model3.
 
 ## Checkpoint resolution order
