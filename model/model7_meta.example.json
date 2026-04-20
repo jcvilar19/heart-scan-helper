@@ -1,0 +1,9 @@
+{
+  "img_size": 224,
+  "dropout": 0.2,
+  "use_dataset_stats": true,
+  "train_gray_mean": 0.536137,
+  "train_gray_std": 0.253105,
+  "chosen_threshold": 0.5,
+  "use_inference_tta": false
+}

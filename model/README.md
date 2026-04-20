@@ -1,46 +1,82 @@
-# Cardiomegaly Model (Model3 Integration)
+# Cardiomegaly inference (Model7 + Model3)
 
-This folder now contains a FastAPI inference service that loads the `Model3`
-bundle exported from your notebook and exposes:
+FastAPI service used by the web UI: `POST /predict` (multipart field `image`) and `GET /health`.
 
-- `POST /predict` (multipart/form-data with `image`)
-- `GET /health`
+The loader prefers **Model7** artifacts when present, then falls back to Model3.
 
-## 1) Export bundle from notebook
+## Checkpoint resolution order
 
-Your notebook already saves this artifact in Cell 20:
+1. `MODEL_CHECKPOINT` or `MODEL_BUNDLE_PATH` or `MODEL7_BUNDLE_PATH` or `MODEL3_BUNDLE_PATH` (first set wins)
+2. Otherwise, the first existing file under `model/`:
+   - `model7_bundle.pth` (recommended for Model7)
+   - `model3_bundle.pth`
+   - `best_model.pth` (requires a meta JSON; see below)
 
-- `model3_bundle.pth`
+## Option A — Model7 full bundle (recommended)
 
-Copy that file into this folder:
+After training in `Model7.ipynb`, run a **new cell** once you have `train_mean`, `train_std`, and `best_threshold` (your notebook uses `best_threshold = thr_youden` after TTA):
 
-- `model/model3_bundle.pth`
+```python
+import torch, os, json
 
-You can also keep it somewhere else and set `MODEL3_BUNDLE_PATH`.
+bundle = {
+    "model_state_dict": model.state_dict(),
+    "config": {k: v for k, v in CFG.__dict__.items() if isinstance(v, (int, float, bool, str))},
+    "chosen_threshold": float(best_threshold),
+    "train_gray_mean": float(train_mean),
+    "train_gray_std": float(train_std),
+    "use_inference_tta": True,   # matches validation TTA; set False for faster CPU inference
+}
 
-## 2) Install Python dependencies
+out_path = os.path.join(CFG.output_dir, "model7_bundle.pth")
+torch.save(bundle, out_path)
+print("Saved:", out_path)
+```
+
+Copy `model7_bundle.pth` into this repo folder:
+
+- `model/model7_bundle.pth`
+
+## Option B — Notebook output `best_model.pth` + meta JSON
+
+The notebook saves weights only:
+
+```python
+torch.save(model.state_dict(), os.path.join(CFG.output_dir, "best_model.pth"))
+```
+
+Copy:
+
+- `best_model.pth` → `model/best_model.pth`
+- Create `model/model7_meta.json` (see `model/model7_meta.example.json`)
+
+Required meta fields:
+
+- `img_size`, `dropout`, `use_dataset_stats`
+- `train_gray_mean`, `train_gray_std` (from your notebook’s `estimate_gray_mean_std`)
+- `chosen_threshold` (e.g. `best_threshold` / `thr_youden` after TTA)
+- Optional: `use_inference_tta` (`true` to average the same 3 TTA crops as in the notebook)
+
+You can point to a custom meta path with `MODEL_META_PATH`.
+
+## Install and run
 
 ```bash
 pip install -r model/requirements.txt
-```
-
-## 3) Run inference API
-
-```bash
 uvicorn model.predict:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-## 4) Connect frontend to backend
+`GET /health` returns `checkpoint`, `model_version` (`model7` | `model3` | `custom`), and whether TTA is on.
 
-In your frontend `.env` add:
+## Frontend
+
+In `.env` (local, not committed):
 
 ```env
 VITE_PREDICT_API_URL="http://localhost:8000"
 ```
 
-Then restart Vite (`npm run dev`).
-
-## API response format
+## API response
 
 ```json
 {
@@ -50,5 +86,4 @@ Then restart Vite (`npm run dev`).
 }
 ```
 
-`heatmap_url` is currently optional and returned as `null` until Grad-CAM
-generation is added on the backend.
+`heatmap_url` is reserved for future Grad-CAM support.
