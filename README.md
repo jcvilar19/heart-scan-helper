@@ -35,7 +35,18 @@ npm install
 npm run dev
 ```
 
-Set `VITE_PREDICT_API_URL=http://localhost:8000` in a local `.env` file (do not commit secrets) to use the Python backend.
+Create a local `.env` from the template (this file is gitignored):
+
+```bash
+copy .env.example .env
+```
+
+Then edit `.env` and add your **Supabase** URL and anon key (Dashboard → Project Settings → API):
+
+- `VITE_SUPABASE_URL` / `VITE_SUPABASE_PUBLISHABLE_KEY` (browser)
+- `SUPABASE_URL` / `SUPABASE_PUBLISHABLE_KEY` (same values for SSR)
+
+Optional: `VITE_PREDICT_API_URL=http://localhost:8000` for the Python backend.
 
 ## Inference API
 

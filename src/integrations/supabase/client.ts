@@ -10,7 +10,9 @@ function createSupabaseClient() {
 
   if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
     throw new Error(
-      'Missing Supabase environment variables. Ensure SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY (or VITE_ prefixed versions) are set in your .env file.'
+      "Missing Supabase environment variables. Copy `.env.example` to `.env` in the project root, then set " +
+        "VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY (Project Settings → API → Project URL / anon public key). " +
+        "For SSR, also set SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY to the same values (without the VITE_ prefix).",
     );
   }
 
