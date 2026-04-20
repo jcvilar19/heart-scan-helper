@@ -1,5 +1,5 @@
 import { Outlet, Link, createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
-
+import { Toaster } from "@/components/ui/sonner";
 import appCss from "../styles.css?url";
 
 function NotFoundComponent() {
@@ -29,26 +29,30 @@ export const Route = createRootRoute({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
-      { name: "description", content: "Lovable Generated Project" },
-      { name: "author", content: "Lovable" },
-      { property: "og:title", content: "Lovable App" },
-      { property: "og:description", content: "Lovable Generated Project" },
+      { title: "CardioScan — AI Cardiomegaly Detection from Chest X-rays" },
+      {
+        name: "description",
+        content:
+          "Upload chest X-ray images and get an AI-assisted cardiomegaly probability score in seconds. Designed for clinicians and researchers.",
+      },
+      { name: "author", content: "CardioScan" },
+      { property: "og:title", content: "CardioScan — AI Cardiomegaly Detection" },
+      { property: "og:description", content: "AI-assisted cardiomegaly screening from chest X-rays." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
-      { name: "twitter:site", content: "@Lovable" },
     ],
-    links: [
-      {
-        rel: "stylesheet",
-        href: appCss,
-      },
-    ],
+    links: [{ rel: "stylesheet", href: appCss }],
   }),
   shellComponent: RootShell,
   component: RootComponent,
   notFoundComponent: NotFoundComponent,
 });
+
+function ThemeBootstrap() {
+  // Avoid flash of incorrect theme by reading localStorage before hydration
+  const code = `(function(){try{var t=localStorage.getItem('rx-theme');var d=t?t==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;if(d)document.documentElement.classList.add('dark');}catch(e){}})();`;
+  return <script dangerouslySetInnerHTML={{ __html: code }} />;
+}
 
 function RootShell({ children }: { children: React.ReactNode }) {
   return (
@@ -57,7 +61,9 @@ function RootShell({ children }: { children: React.ReactNode }) {
         <HeadContent />
       </head>
       <body>
+        <ThemeBootstrap />
         {children}
+        <Toaster richColors position="top-right" />
         <Scripts />
       </body>
     </html>
