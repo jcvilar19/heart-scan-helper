@@ -31,15 +31,14 @@ function HomePage() {
       file,
       previewUrl: URL.createObjectURL(file),
       status: "pending",
+      notes: "",
     }));
 
     setItems((prev) => [...newItems, ...prev]);
 
     // Process sequentially so the UI animates one at a time
     for (const item of newItems) {
-      setItems((prev) =>
-        prev.map((i) => (i.id === item.id ? { ...i, status: "analyzing" } : i)),
-      );
+      setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, status: "analyzing" } : i)));
       try {
         const result = await classifyImage(item.file);
         setItems((prev) =>
@@ -48,9 +47,7 @@ function HomePage() {
       } catch (err) {
         setItems((prev) =>
           prev.map((i) =>
-            i.id === item.id
-              ? { ...i, status: "error", error: (err as Error).message }
-              : i,
+            i.id === item.id ? { ...i, status: "error", error: (err as Error).message } : i,
           ),
         );
       }
@@ -68,6 +65,10 @@ function HomePage() {
   const handleClear = () => {
     items.forEach((i) => URL.revokeObjectURL(i.previewUrl));
     setItems([]);
+  };
+
+  const handleNotesChange = (id: string, notes: string) => {
+    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, notes } : i)));
   };
 
   const handleSave = async () => {
@@ -131,8 +132,8 @@ function HomePage() {
             </span>
           </h1>
           <p className="mx-auto mt-4 max-w-2xl text-pretty text-base text-muted-foreground sm:text-lg">
-            Upload single or multiple X-ray images. Each image receives a
-            probability score and a binary verdict in seconds.
+            Upload single or multiple X-ray images. Each image receives a probability score and a
+            binary verdict in seconds.
           </p>
         </section>
 
@@ -158,7 +159,12 @@ function HomePage() {
 
         {/* Results */}
         <div className="mx-auto mt-10 max-w-6xl">
-          <ResultsGallery items={items} onRemove={handleRemove} onClear={handleClear} />
+          <ResultsGallery
+            items={items}
+            onRemove={handleRemove}
+            onClear={handleClear}
+            onNotesChange={handleNotesChange}
+          />
         </div>
 
         {/* Feature strip */}
@@ -183,7 +189,8 @@ function HomePage() {
         )}
 
         <p className="mx-auto mt-16 max-w-2xl text-center text-xs text-muted-foreground">
-          For research and educational use only. Not a substitute for professional medical diagnosis.
+          For research and educational use only. Not a substitute for professional medical
+          diagnosis.
         </p>
       </main>
     </div>

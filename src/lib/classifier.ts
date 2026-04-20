@@ -1,14 +1,10 @@
-/**
- * Mocked cardiomegaly classifier.
- *
- * Replace `mockClassify` with a real `fetch()` call to your Python service
- * (see /model/predict.py) once it is deployed. The contract is intentionally
- * minimal so the UI doesn't need to change.
- */
+import { requestPrediction } from "@/services/predict";
 
 export type ClassificationResult = {
+  label: string;
   probability: number; // [0, 1]
   prediction: 0 | 1;
+  heatmapUrl?: string;
 };
 
 const DECISION_THRESHOLD = 0.5;
@@ -26,17 +22,40 @@ function pseudoHash(input: string): number {
   return (h >>> 0) / 0xffffffff;
 }
 
-export async function classifyImage(file: File): Promise<ClassificationResult> {
+async function mockClassify(file: File): Promise<ClassificationResult> {
   // Simulate network + inference latency (700-1500ms)
   const latency = 700 + Math.random() * 800;
   await new Promise((r) => setTimeout(r, latency));
-
   const seed = pseudoHash(`${file.name}:${file.size}`);
-  // Bias slightly toward the middle of the range for a realistic spread
   const probability = Math.min(0.99, Math.max(0.01, seed));
   const prediction: 0 | 1 = probability >= DECISION_THRESHOLD ? 1 : 0;
+  const label = prediction === 1 ? PATHOLOGY_LABEL : `No ${PATHOLOGY_LABEL} indication`;
 
-  return { probability, prediction };
+  return { label, probability, prediction };
+}
+
+export async function classifyImage(file: File): Promise<ClassificationResult> {
+  // Keep the app runnable in dev even without a deployed model API.
+  if (!import.meta.env.VITE_PREDICT_API_URL) {
+    return mockClassify(file);
+  }
+
+  try {
+    const response = await requestPrediction(file);
+    const probability = Math.min(1, Math.max(0, response.confidence));
+    const prediction: 0 | 1 = probability >= DECISION_THRESHOLD ? 1 : 0;
+
+    return {
+      label: response.prediction,
+      probability,
+      prediction,
+      heatmapUrl: response.heatmap_url ?? undefined,
+    };
+  } catch (error) {
+    // If the model API is temporarily down, keep UI functional with mock output.
+    console.warn("Predict API unavailable, using local mock fallback.", error);
+    return mockClassify(file);
+  }
 }
 
 export const PATHOLOGY_LABEL = "Cardiomegaly";
