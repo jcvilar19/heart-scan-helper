@@ -1,6 +1,16 @@
+# ── Web server (API) ──────────────────────────────────────────────────────
 fastapi
 uvicorn[standard]
 python-multipart
-torch
-torchvision
-pillow
+
+# ── ML / training (notebook) ─────────────────────────────────────────────
+torch>=2.11.0
+torchvision>=0.26.0
+pillow>=12.2.0
+numpy>=2.4.0
+pandas>=3.0.0
+scikit-learn>=1.8.0
+matplotlib>=3.10.0
+
+# ── Notebook environment ──────────────────────────────────────────────────
+jupyter>=1.1.0
