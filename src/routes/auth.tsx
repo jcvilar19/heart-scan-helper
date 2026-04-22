@@ -33,7 +33,7 @@ function AuthPage() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    if (!loading && user) navigate({ to: "/" });
+    if (!loading && user) navigate({ to: "/app" });
   }, [user, loading, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -62,7 +62,7 @@ function AuthPage() {
         if (error) throw error;
         toast.success("Welcome back.");
       }
-      navigate({ to: "/" });
+      navigate({ to: "/app" });
     } catch (err) {
       toast.error((err as Error).message ?? "Authentication failed.");
     } finally {
@@ -149,7 +149,7 @@ function AuthPage() {
 
         <p className="mt-4 text-center text-xs text-muted-foreground">
           <Link to="/" className="hover:text-foreground">
-            ← Back to scanner
+            ← Back to home
           </Link>
         </p>
       </div>
