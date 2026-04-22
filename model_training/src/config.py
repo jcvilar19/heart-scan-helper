@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import List
 
 import torch
 
@@ -20,32 +20,31 @@ class Config:
     seed: int = 42
 
     # ── Image / DataLoader ───────────────────────────────────────────────
-    img_size:    int = 300   # EfficientNet-B3 native resolution
+    img_size:    int = 224   # torchxrayvision DenseNet-121 native resolution
     batch_size:  int = 32
-    num_workers: int = 0     # keep 0 for macOS / Jupyter (no spawn issues)
+    num_workers: int = 4
 
     # ── Train / val / test split ─────────────────────────────────────────
     val_size:  float = 0.15
     test_size: float = 0.15
 
-    # ── Training schedule ────────────────────────────────────────────────
-    frozen_epochs:   int = 3
-    finetune_epochs: int = 15
+    # ── Training schedule (two-stage) ────────────────────────────────────
+    frozen_epochs:   int = 3       # stage 1: head-only warmup
+    finetune_epochs: int = 22      # stage 2: full unfreeze with cosine LR
+    early_stop_patience: int = 6   # early stop on val AUC during stage 2
 
     # ── Optimiser ────────────────────────────────────────────────────────
-    head_lr:             float = 5e-4
-    backbone_lr:         float = 3e-5
-    weight_decay:        float = 1e-4
-    dropout:             float = 0.20
-    early_stop_patience: int   = 6
+    head_lr:      float = 3e-4     # classifier LR (both stages)
+    backbone_lr:  float = 1e-4     # features LR (stage 2 only)
+    weight_decay: float = 1e-4
+    grad_clip:    float = 1.0
 
-    # ── Dataset normalisation ────────────────────────────────────────────
-    use_dataset_stats: bool         = True
-    stats_sample_size: Optional[int] = 1200
+    # ── Multi-seed ensemble ──────────────────────────────────────────────
+    seeds: List[int] = field(default_factory=lambda: [42, 7, 2024])
 
-    # ── Clinical decision thresholds ────────────────────────────────────
-    target_sensitivity: float = 0.90
-    target_specificity: float = 0.90
+    # ── Inference ────────────────────────────────────────────────────────
+    tta_passes:  int = 6           # number of deterministic TTA transforms (max 6)
+    n_bootstrap: int = 1000        # bootstrap iterations for threshold stabilisation
 
     # ── Device (auto-detected) ───────────────────────────────────────────
     device: str = (

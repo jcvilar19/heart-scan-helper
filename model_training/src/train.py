@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import contextlib
 import copy
-import io
 import json
 import os
 from typing import List, Optional, Tuple
@@ -16,517 +14,471 @@ from sklearn.metrics import confusion_matrix, roc_auc_score
 from torch.utils.data import DataLoader
 
 from src.config import CFG
-from src.dataset import CardiomegalyDataset, SubmissionDataset
+from src.dataset import ChestXrayDataset, SubmissionDataset, TTADataset
 from src.model import (
-    CardiomegalyModel,
     build_model,
+    cardio_logit,
     freeze_backbone,
-    unfreeze_last_blocks,
+    trainable_params,
+    unfreeze_all,
 )
-from src.utils import free_device_cache, log_run
+from src.transforms import make_tta_transforms
+from src.utils import free_device_cache, log_run, set_seed
 
 
 # ---------------------------------------------------------------------------
 # Epoch runner
 # ---------------------------------------------------------------------------
-
-def run_epoch(
-    model: CardiomegalyModel,
+def run_one_epoch(
+    model: nn.Module,
     loader: DataLoader,
-    criterion=None,
-    optimizer=None,
+    criterion: Optional[nn.Module] = None,
+    optimizer: Optional[optim.Optimizer] = None,
+    scaler: Optional[torch.cuda.amp.GradScaler] = None,
+    grad_clip: Optional[float] = None,
 ) -> dict:
     """Single forward pass over *loader*.
 
-    Pass ``optimizer=None`` for evaluation mode.
-    Expects batches of ``(images, tabular, labels, names)``.
+    Pass ``optimizer=None`` for evaluation. Expects (image, label, name) batches.
+    Uses CUDA AMP when available.
     """
     is_train = optimizer is not None
     model.train(is_train)
 
-    losses, all_y_true, all_y_prob, all_names = [], [], [], []
+    losses, logits_all, labels_all, names_all = [], [], [], []
+    pin = (CFG.device == "cuda")
+    grad_clip = grad_clip if grad_clip is not None else CFG.grad_clip
 
-    for images, tabular, labels, names in loader:
-        images  = images.to(CFG.device)
-        tabular = tabular.to(CFG.device)
-        labels  = labels.to(CFG.device)
+    amp_ctx = torch.cuda.amp.autocast(enabled=(CFG.device == "cuda"))
+    for x, y, names in loader:
+        x = x.to(CFG.device, non_blocking=pin)
+        y = y.to(CFG.device, non_blocking=pin)
 
         with torch.set_grad_enabled(is_train):
-            logits = model(images, tabular).squeeze(1)
-            loss   = criterion(logits, labels) if criterion is not None else None
-            probs  = torch.sigmoid(logits)
+            with amp_ctx:
+                logit = cardio_logit(model, x)
+                loss = criterion(logit, y) if criterion is not None else None
 
             if is_train:
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+                if scaler is not None and scaler.is_enabled():
+                    scaler.scale(loss).backward()
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(trainable_params(model), grad_clip)
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(trainable_params(model), grad_clip)
+                    optimizer.step()
 
         if loss is not None:
             losses.append(loss.item())
-        all_y_true.extend(labels.detach().cpu().numpy())
-        all_y_prob.extend(probs.detach().cpu().numpy())
-        all_names.extend(list(names))
+        logits_all.append(logit.detach().float().cpu().numpy())
+        labels_all.append(y.detach().float().cpu().numpy())
+        names_all.extend(list(names))
 
-    y_true = np.array(all_y_true, dtype=np.float32)
-    y_prob = np.array(all_y_prob, dtype=np.float32)
-    y_pred = (y_prob >= 0.5).astype(int)
+    y_true  = np.concatenate(labels_all)
+    y_logit = np.concatenate(logits_all)
+    y_prob  = 1.0 / (1.0 + np.exp(-y_logit))
+    auc     = roc_auc_score(y_true, y_prob) if len(np.unique(y_true)) > 1 else float("nan")
 
     return {
-        "loss":   float(np.mean(losses)) if losses else np.nan,
-        "auc":    float(roc_auc_score(y_true, y_prob)) if len(np.unique(y_true)) > 1 else np.nan,
-        "acc":    float((y_pred == y_true).mean()),
+        "loss":   float(np.mean(losses)) if losses else float("nan"),
+        "auc":    float(auc),
         "y_true": y_true,
         "y_prob": y_prob,
-        "y_pred": y_pred,
-        "names":  all_names,
+        "names":  names_all,
     }
 
 
-def run_epoch_tta(
-    model: CardiomegalyModel,
-    df: pd.DataFrame,
-    tta_transforms: List,
-) -> dict:
-    """Average predictions across all TTA transforms for labelled data."""
-    all_probs, final_names, final_y_true = [], None, None
+# ---------------------------------------------------------------------------
+# Single-seed two-stage training
+# ---------------------------------------------------------------------------
+def train_one_seed(
+    seed: int,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    output_dir: Optional[str] = None,
+    config=None,
+) -> Tuple[nn.Module, float, str, list[dict]]:
+    """Train ONE model end-to-end (frozen warmup → full fine-tune).
 
-    for tf in tta_transforms:
-        ds     = CardiomegalyDataset(df, transform=tf)
-        loader = DataLoader(
-            ds, batch_size=CFG.batch_size, shuffle=False,
-            num_workers=CFG.num_workers, pin_memory=False,
-        )
-        out = run_epoch(model, loader)
-        all_probs.append(out["y_prob"])
-        if final_names is None:
-            final_names, final_y_true = out["names"], out["y_true"]
-
-    mean_prob = np.mean(np.stack(all_probs), axis=0)
-    mean_pred = (mean_prob >= 0.5).astype(int)
-
-    return {
-        "loss":   np.nan,
-        "auc":    float(roc_auc_score(final_y_true, mean_prob)) if len(np.unique(final_y_true)) > 1 else np.nan,
-        "acc":    float((mean_pred == final_y_true).mean()),
-        "y_true": final_y_true,
-        "y_prob": mean_prob,
-        "y_pred": mean_pred,
-        "names":  final_names,
-    }
-
-
-def predict_submission_tta(
-    model: CardiomegalyModel,
-    submission_dir: str,
-    tta_transforms: List,
-) -> dict:
-    """TTA inference on unlabelled submission images.
-
-    Clinical metadata (age, sex) is unknown → neutral defaults (0.5).
+    Returns (best_model, best_val_auc, checkpoint_path, history).
     """
-    all_probs, final_names = [], None
+    cfg = config or CFG
+    output_dir = output_dir or cfg.output_dir
+    os.makedirs(output_dir, exist_ok=True)
+
+    print("\n" + "=" * 80)
+    print(f" Training with seed = {seed}")
+    print("=" * 80)
+    set_seed(seed)
+
+    model     = build_model().to(cfg.device)
+    criterion = nn.BCEWithLogitsLoss()
+    scaler    = torch.cuda.amp.GradScaler(enabled=(cfg.device == "cuda"))
+    history: list[dict] = []
+
+    # ── Stage 1: frozen backbone, head-only warmup ─────────────────────────
+    freeze_backbone(model)
+    opt_frozen = optim.AdamW(
+        trainable_params(model), lr=cfg.head_lr, weight_decay=cfg.weight_decay,
+    )
+    n_trainable = sum(p.numel() for p in trainable_params(model))
+    print(f"[seed={seed}] Stage 1 (frozen): {n_trainable:,} trainable params")
+    for ep in range(1, cfg.frozen_epochs + 1):
+        t = run_one_epoch(model, train_loader, criterion, opt_frozen, scaler)
+        v = run_one_epoch(model, val_loader, criterion)
+        history.append({
+            "seed": seed, "stage": "frozen", "epoch": ep,
+            "train_loss": t["loss"], "train_auc": t["auc"],
+            "val_loss":   v["loss"], "val_auc":   v["auc"],
+            "lr": opt_frozen.param_groups[0]["lr"],
+        })
+        print(
+            f"  [frozen] {ep}/{cfg.frozen_epochs}  "
+            f"train_loss={t['loss']:.4f}  val_auc={v['auc']:.4f}"
+        )
+
+    # ── Stage 2: full fine-tune with differential LRs + cosine schedule ───
+    unfreeze_all(model)
+    opt_ft = optim.AdamW(
+        [
+            {"params": model.features.parameters(),   "lr": cfg.backbone_lr},
+            {"params": model.classifier.parameters(), "lr": cfg.head_lr},
+        ],
+        weight_decay=cfg.weight_decay,
+    )
+    sched = optim.lr_scheduler.CosineAnnealingLR(
+        opt_ft, T_max=cfg.finetune_epochs, eta_min=cfg.backbone_lr * 0.01,
+    )
+    n_trainable = sum(p.numel() for p in trainable_params(model))
+    print(f"[seed={seed}] Stage 2 (full):  {n_trainable:,} trainable params")
+
+    best_auc, best_state, patience_ctr = -1.0, None, 0
+    for ep in range(1, cfg.finetune_epochs + 1):
+        t = run_one_epoch(model, train_loader, criterion, opt_ft, scaler)
+        v = run_one_epoch(model, val_loader, criterion)
+        sched.step()
+        history.append({
+            "seed": seed, "stage": "finetune", "epoch": ep,
+            "train_loss": t["loss"], "train_auc": t["auc"],
+            "val_loss":   v["loss"], "val_auc":   v["auc"],
+            "lr": opt_ft.param_groups[0]["lr"],
+        })
+        print(
+            f"  [ft]     {ep}/{cfg.finetune_epochs}  "
+            f"train_loss={t['loss']:.4f}  val_auc={v['auc']:.4f}  "
+            f"lr_bb={opt_ft.param_groups[0]['lr']:.2e}"
+        )
+
+        if v["auc"] > best_auc:
+            best_auc, best_state, patience_ctr = (
+                v["auc"], copy.deepcopy(model.state_dict()), 0
+            )
+        else:
+            patience_ctr += 1
+            if patience_ctr >= cfg.early_stop_patience:
+                print(f"  [ft]     early stop at epoch {ep} (best val AUC = {best_auc:.4f})")
+                break
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
+
+    ckpt_path = os.path.join(output_dir, f"model_seed{seed}.pth")
+    torch.save(best_state if best_state is not None else model.state_dict(), ckpt_path)
+    print(f"[seed={seed}] Best val AUC = {best_auc:.4f}   checkpoint → {ckpt_path}")
+
+    return model, best_auc, ckpt_path, history
+
+
+# ---------------------------------------------------------------------------
+# Multi-seed ensemble training
+# ---------------------------------------------------------------------------
+def train_ensemble(
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    seeds: Optional[List[int]] = None,
+    output_dir: Optional[str] = None,
+    config=None,
+) -> Tuple[List[Tuple[int, nn.Module, float, str]], pd.DataFrame]:
+    """Train one model per seed and return (models_list, full_history_df).
+
+    `models_list` items: (seed, trained_model, best_val_auc, checkpoint_path).
+    """
+    cfg = config or CFG
+    seeds = seeds if seeds is not None else cfg.seeds
+    output_dir = output_dir or cfg.output_dir
+
+    models, all_history = [], []
+    for seed in seeds:
+        m, auc, ckpt, hist = train_one_seed(
+            seed, train_loader, val_loader,
+            output_dir=output_dir, config=cfg,
+        )
+        models.append((seed, m, auc, ckpt))
+        all_history.extend(hist)
+        free_device_cache(cfg.device)
+
+    history_df = pd.DataFrame(all_history)
+    history_df.to_csv(os.path.join(output_dir, "training_history.csv"), index=False)
+
+    print("\n" + "=" * 80)
+    print("Per-seed best val AUC:")
+    for seed, _, auc, _ in models:
+        print(f"  seed {seed}: {auc:.4f}")
+    print("=" * 80)
+
+    return models, history_df
+
+
+# ---------------------------------------------------------------------------
+# TTA inference
+# ---------------------------------------------------------------------------
+def tta_predict(
+    model: nn.Module,
+    df: pd.DataFrame,
+    image_dir: Optional[str] = None,
+    has_labels: bool = True,
+    tta_transforms: Optional[List] = None,
+    config=None,
+) -> dict:
+    """Run TTA inference for ONE model on a DataFrame.
+
+    Predictions are averaged in **logit space** across all TTA passes.
+    """
+    cfg = config or CFG
+    tta_transforms = tta_transforms or make_tta_transforms(cfg.img_size)
+    tta_transforms = tta_transforms[:cfg.tta_passes]
+
+    all_logits: list[np.ndarray] = []
+    names_ref, labels_ref = None, None
+
+    pin = (cfg.device == "cuda")
+    amp_ctx = torch.cuda.amp.autocast(enabled=(cfg.device == "cuda"))
 
     for tf in tta_transforms:
-        ds     = SubmissionDataset(submission_dir, transform=tf)
+        ds = TTADataset(df, tf, image_dir)
         loader = DataLoader(
-            ds, batch_size=CFG.batch_size, shuffle=False,
-            num_workers=CFG.num_workers, pin_memory=False,
+            ds, batch_size=cfg.batch_size, num_workers=cfg.num_workers,
+            pin_memory=pin, shuffle=False,
         )
+        pass_logits, pass_names, pass_labels = [], [], []
         model.eval()
-        fold_probs, fold_names = [], []
-        with torch.no_grad():
-            for images, names in loader:
-                images  = images.to(CFG.device)
-                tabular = torch.full((images.size(0), 2), 0.5, device=CFG.device)
-                probs   = torch.sigmoid(model(images, tabular).squeeze(1)).detach().cpu().numpy()
-                fold_probs.extend(probs)
-                fold_names.extend(list(names))
+        with torch.no_grad(), amp_ctx:
+            for x, y, names in loader:
+                x = x.to(cfg.device, non_blocking=pin)
+                logit = cardio_logit(model, x).float().cpu().numpy()
+                pass_logits.append(logit)
+                pass_names.extend(list(names))
+                if has_labels:
+                    pass_labels.append(y.numpy())
+        all_logits.append(np.concatenate(pass_logits))
+        if names_ref is None:
+            names_ref  = pass_names
+            labels_ref = np.concatenate(pass_labels) if has_labels else None
 
-        all_probs.append(np.array(fold_probs))
-        if final_names is None:
-            final_names = fold_names
-
+    mean_logit = np.stack(all_logits, axis=0).mean(axis=0)
+    mean_prob  = (1.0 / (1.0 + np.exp(-mean_logit))).astype(np.float32)
     return {
-        "names":  final_names,
-        "y_prob": np.mean(np.stack(all_probs), axis=0),
+        "names":      names_ref,
+        "y_prob":     mean_prob,
+        "y_true":     labels_ref,
+        "mean_logit": mean_logit,
     }
+
+
+def tta_predict_ensemble(
+    models_list: List[Tuple[int, nn.Module, float, str]],
+    df: pd.DataFrame,
+    image_dir: Optional[str] = None,
+    has_labels: bool = True,
+    tta_transforms: Optional[List] = None,
+    config=None,
+) -> dict:
+    """Run TTA for every model in `models_list` and average in logit space."""
+    cfg = config or CFG
+    all_logits: list[np.ndarray] = []
+    names_ref, labels_ref = None, None
+
+    for (seed, model, _, _) in models_list:
+        print(f"  TTA with seed={seed}...")
+        pred = tta_predict(
+            model, df, image_dir=image_dir, has_labels=has_labels,
+            tta_transforms=tta_transforms, config=cfg,
+        )
+        all_logits.append(pred["mean_logit"])
+        if names_ref is None:
+            names_ref  = pred["names"]
+            labels_ref = pred["y_true"]
+
+    mean_logit = np.stack(all_logits, axis=0).mean(axis=0)
+    mean_prob  = (1.0 / (1.0 + np.exp(-mean_logit))).astype(np.float32)
+    return {"names": names_ref, "y_prob": mean_prob, "y_true": labels_ref}
+
+
+# ---------------------------------------------------------------------------
+# Submission inference
+# ---------------------------------------------------------------------------
+def predict_submission(
+    models_list: List[Tuple[int, nn.Module, float, str]],
+    submission_dir: str,
+    tta_transforms: Optional[List] = None,
+    config=None,
+) -> dict:
+    """TTA + ensemble inference on an unlabelled submission directory.
+
+    Wraps the directory in a DataFrame so we can reuse `tta_predict_ensemble`.
+    """
+    cfg = config or CFG
+    files = sorted(
+        f for f in os.listdir(submission_dir)
+        if os.path.isfile(os.path.join(submission_dir, f))
+        and f.lower().endswith((".png", ".jpg", ".jpeg"))
+    )
+    sub_df = pd.DataFrame({"filename": files})
+    return tta_predict_ensemble(
+        models_list, sub_df,
+        image_dir=submission_dir, has_labels=False,
+        tta_transforms=tta_transforms, config=cfg,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
+def metrics_at_threshold(y_true, y_prob, threshold: float) -> dict:
+    """Composite-grading-aware metric set at a given threshold.
 
-def compute_basic_metrics(y_true, y_prob, threshold: float) -> dict:
-    """Compute the full clinical metric set at a given threshold."""
+    composite = 0.5·AUC + 0.25·sensitivity + 0.25·specificity
+    """
     y_pred = (y_prob >= threshold).astype(int)
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
 
-    sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
-    precision   = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-    accuracy    = (tp + tn) / (tp + tn + fp + fn)
-    youden      = sensitivity + specificity - 1.0
-    auc         = roc_auc_score(y_true, y_prob) if len(np.unique(y_true)) > 1 else np.nan
+    sens = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    spec = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+    acc  = (tp + tn) / (tp + tn + fp + fn)
+    auc  = roc_auc_score(y_true, y_prob) if len(np.unique(y_true)) > 1 else float("nan")
+    composite = 0.5 * auc + 0.25 * sens + 0.25 * spec
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
 
-    return dict(
-        threshold=float(threshold),
-        auc=float(auc),
-        sensitivity=float(sensitivity),
-        specificity=float(specificity),
-        youden=float(youden),
-        accuracy=float(accuracy),
-        precision=float(precision),
-        tp=int(tp), tn=int(tn), fp=int(fp), fn=int(fn),
-    )
-
-
-def find_best_threshold(
-    y_true,
-    y_prob,
-    mode: str = "youden",
-) -> Tuple[float, pd.DataFrame]:
-    """Search all candidate thresholds and pick the best one for *mode*.
-
-    mode options
-    ─────────────
-    'youden'              – maximises Youden index (sensitivity + specificity - 1)
-    'target_sensitivity'  – highest specificity at ≥ CFG.target_sensitivity
-    'target_specificity'  – highest sensitivity at ≥ CFG.target_specificity
-    """
-    candidates = np.concatenate(([0.0], np.unique(np.round(y_prob, 6)), [1.0]))
-    tab = pd.DataFrame([compute_basic_metrics(y_true, y_prob, t) for t in candidates])
-
-    if mode == "youden":
-        best_row = tab.sort_values(["youden", "auc", "accuracy"], ascending=False).iloc[0]
-
-    elif mode == "target_sensitivity":
-        good = tab[tab["sensitivity"] >= CFG.target_sensitivity]
-        best_row = (
-            good.sort_values(["specificity", "youden"], ascending=False).iloc[0]
-            if len(good)
-            else tab.iloc[(tab["sensitivity"] - CFG.target_sensitivity).abs().argsort()].iloc[0]
-        )
-
-    elif mode == "target_specificity":
-        good = tab[tab["specificity"] >= CFG.target_specificity]
-        best_row = (
-            good.sort_values(["sensitivity", "youden"], ascending=False).iloc[0]
-            if len(good)
-            else tab.iloc[(tab["specificity"] - CFG.target_specificity).abs().argsort()].iloc[0]
-        )
-
-    else:
-        raise ValueError(
-            f"Unknown mode '{mode}'. Choose: youden | target_sensitivity | target_specificity"
-        )
-
-    return float(best_row["threshold"]), tab
+    return {
+        "threshold":   float(threshold),
+        "auc":         float(auc),
+        "sensitivity": float(sens),
+        "specificity": float(spec),
+        "accuracy":    float(acc),
+        "youden":      float(sens + spec - 1.0),
+        "composite":   float(composite),
+        "precision":   float(precision),
+        "tp": int(tp), "tn": int(tn), "fp": int(fp), "fn": int(fn),
+    }
 
 
-# ---------------------------------------------------------------------------
-# Single training stage
-# ---------------------------------------------------------------------------
+# Backwards-compatible alias (used by older notebook cells)
+compute_basic_metrics = metrics_at_threshold
 
-def train_stage(
-    model: CardiomegalyModel,
-    train_loader: DataLoader,
-    val_loader: DataLoader,
-    criterion,
-    optimizer,
-    scheduler,
-    epochs: int,
-    stage_name: str,
-) -> Tuple[CardiomegalyModel, pd.DataFrame]:
-    """Run one training stage with early stopping on val AUC."""
-    best_score, best_state, patience_ctr = -np.inf, None, 0
-    history: list[dict] = []
 
-    for epoch in range(1, epochs + 1):
-        tr  = run_epoch(model, train_loader, criterion, optimizer)
-        val = run_epoch(model, val_loader,   criterion)
-
-        score = val["auc"] if not np.isnan(val["auc"]) else val["acc"]
-        if scheduler is not None:
-            if isinstance(scheduler, optim.lr_scheduler.ReduceLROnPlateau):
-                scheduler.step(score)
-            else:
-                scheduler.step()
-
-        history.append({
-            "stage":      stage_name,
-            "epoch":      epoch,
-            "train_loss": tr["loss"],  "train_auc": tr["auc"],
-            "val_loss":   val["loss"], "val_auc":   val["auc"], "val_acc": val["acc"],
-        })
-
-        print(
-            f"[{stage_name}] epoch {epoch:>2}/{epochs} | "
-            f"train_loss={tr['loss']:.4f} | "
-            f"val_loss={val['loss']:.4f} | "
-            f"val_auc={val['auc']:.4f} | "
-            f"val_acc={val['acc']:.4f}"
-        )
-
+def find_best_threshold(y_true, y_prob) -> Tuple[float, dict]:
+    """Pick the threshold that maximises sensitivity + specificity (Youden's J)."""
+    candidates = np.unique(np.round(np.concatenate([[0.0], y_prob, [1.0]]), 6))
+    best_score, best_row = -np.inf, None
+    for thr in candidates:
+        m = metrics_at_threshold(y_true, y_prob, thr)
+        score = m["sensitivity"] + m["specificity"]
         if score > best_score:
-            best_score, best_state, patience_ctr = score, copy.deepcopy(model.state_dict()), 0
-        else:
-            patience_ctr += 1
-            if patience_ctr >= CFG.early_stop_patience:
-                print("Early stopping triggered.")
-                break
-
-    if best_state is not None:
-        model.load_state_dict(best_state)
-    return model, pd.DataFrame(history)
+            best_score, best_row = score, m
+    return float(best_row["threshold"]), best_row
 
 
-# ---------------------------------------------------------------------------
-# Full two-stage training pipeline
-# ---------------------------------------------------------------------------
+def bootstrap_threshold(
+    y_true, y_prob,
+    n_boot: Optional[int] = None,
+    seed: Optional[int] = None,
+) -> float:
+    """Bootstrap-stabilised threshold (median across resamples).
 
-def train_model(
-    model: CardiomegalyModel,
-    train_loader: DataLoader,
-    val_loader: DataLoader,
-    train_df: pd.DataFrame,
-    n_blocks: int = 7,
-    config: Optional[CFG.__class__] = None,
-) -> Tuple[CardiomegalyModel, pd.DataFrame]:
-    """Run the full two-stage training schedule.
+    Generalises better than a single-shot pick on the raw val set.
+    """
+    n_boot = n_boot if n_boot is not None else CFG.n_bootstrap
+    seed   = seed   if seed   is not None else CFG.seed
 
-    Stage 1 — frozen backbone: only head + tabular branch are trained.
-    Stage 2 — fine-tune:       last *n_blocks* backbone groups are unfrozen.
+    rng = np.random.RandomState(seed)
+    thrs: list[float] = []
+    n = len(y_true)
+    for _ in range(n_boot):
+        idx = rng.randint(0, n, size=n)
+        if len(np.unique(y_true[idx])) < 2:
+            continue
+        thr, _ = find_best_threshold(y_true[idx], y_prob[idx])
+        thrs.append(thr)
+    return float(np.median(thrs)) if thrs else 0.5
 
-    Parameters
-    ──────────
-    model        : freshly built CardiomegalyModel (not yet to device)
-    train_loader : DataLoader for training split
-    val_loader   : DataLoader for validation split
-    train_df     : training DataFrame (needed for pos_weight computation)
-    n_blocks     : how many EfficientNet feature groups to unfreeze in stage 2
-    config       : override global CFG (optional)
 
-    Returns
-    ───────
-    (best_model, history_dataframe)
+def select_threshold(y_true, y_prob, config=None) -> Tuple[float, dict, dict]:
+    """Pick the better of (single-shot) vs (bootstrap) thresholds on composite.
+
+    Bootstrap is preferred unless its composite is clearly worse (margin 0.005).
+    Returns (chosen_threshold, single_metrics, bootstrap_metrics).
     """
     cfg = config or CFG
-
-    n_neg   = int((train_df["label"] == 0).sum())
-    n_pos   = int((train_df["label"] == 1).sum())
-    pos_w   = torch.tensor([n_neg / n_pos], dtype=torch.float32).to(cfg.device)
-    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_w)
-    print(f"pos_weight: {pos_w.item():.4f}  (neg={n_neg}, pos={n_pos})")
-    print(f"Training on: {cfg.device}  |  frozen_epochs: {cfg.frozen_epochs}")
-
-    # ── Stage 1: head only ────────────────────────────────────────────────
-    model = freeze_backbone(model)
-    opt1  = optim.AdamW(
-        model.classifier.parameters(), lr=cfg.head_lr, weight_decay=cfg.weight_decay
-    )
-    sch1 = optim.lr_scheduler.CosineAnnealingLR(opt1, T_max=cfg.frozen_epochs, eta_min=1e-6)
-    model, hist_frozen = train_stage(
-        model, train_loader, val_loader,
-        criterion, opt1, sch1,
-        epochs=cfg.frozen_epochs, stage_name="frozen",
-    )
-
-    # ── Stage 2: fine-tune ────────────────────────────────────────────────
-    print(f"\nFine-tuning last {n_blocks} EfficientNet blocks")
-    model = unfreeze_last_blocks(model, n_blocks=n_blocks)
-    backbone_params = [p for p in model.features.parameters()   if p.requires_grad]
-    head_params     = [p for p in model.classifier.parameters() if p.requires_grad]
-    opt2 = optim.AdamW(
-        [
-            {"params": backbone_params, "lr": cfg.backbone_lr},
-            {"params": head_params,     "lr": cfg.head_lr},
-        ],
-        weight_decay=cfg.weight_decay,
-    )
-    sch2 = optim.lr_scheduler.CosineAnnealingLR(opt2, T_max=cfg.finetune_epochs, eta_min=1e-7)
-    model, hist_ft = train_stage(
-        model, train_loader, val_loader,
-        criterion, opt2, sch2,
-        epochs=cfg.finetune_epochs, stage_name="finetune",
-    )
-
-    history = pd.concat([hist_frozen, hist_ft], ignore_index=True)
-    return model, history
-
-
-# ---------------------------------------------------------------------------
-# Optuna hyperparameter search
-# ---------------------------------------------------------------------------
-
-def optuna_search(
-    train_ds,
-    val_ds,
-    train_df: pd.DataFrame,
-    n_trials: int = 20,
-    config: Optional[CFG.__class__] = None,
-):
-    """Automatic hyperparameter search using Optuna TPE sampler.
-
-    Each trial runs a short training (2 frozen + 4 fine-tune epochs) and
-    returns the best val AUC. Per-epoch output is suppressed to keep logs clean.
-
-    Parameters
-    ──────────
-    train_ds  : CardiomegalyDataset (training split)
-    val_ds    : CardiomegalyDataset (validation split)
-    train_df  : training DataFrame (for pos_weight)
-    n_trials  : number of Optuna trials
-    config    : optional Config override
-
-    Returns
-    ───────
-    optuna.Study  (call .best_params to get the winner)
-    """
-    import optuna
-    optuna.logging.set_verbosity(optuna.logging.WARNING)
-
-    cfg = config or CFG
-
-    def objective(trial: optuna.Trial) -> float:
-        head_lr      = trial.suggest_float("head_lr",      1e-4, 1e-2, log=True)
-        backbone_lr  = trial.suggest_float("backbone_lr",  5e-6, 5e-4, log=True)
-        weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-2, log=True)
-        dropout      = trial.suggest_float("dropout",      0.10, 0.50)
-        batch_size   = trial.suggest_categorical("batch_size", [16, 32, 64])
-        n_blocks     = trial.suggest_int("n_blocks", 2, 8)   # 9 groups total (0–8)
-
-        _kw      = dict(num_workers=cfg.num_workers, pin_memory=False)
-        t_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,  **_kw)
-        v_loader = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, **_kw)
-
-        m     = build_model(dropout).to(cfg.device)
-        n_neg = int((train_df["label"] == 0).sum())
-        n_pos = int((train_df["label"] == 1).sum())
-        pos_w = torch.tensor([n_neg / n_pos], dtype=torch.float32).to(cfg.device)
-        crit  = nn.BCEWithLogitsLoss(pos_weight=pos_w)
-
-        _sink = io.StringIO()
-        with contextlib.redirect_stdout(_sink):
-            m    = freeze_backbone(m)
-            opt1 = optim.AdamW(m.classifier.parameters(), lr=head_lr, weight_decay=weight_decay)
-            sch1 = optim.lr_scheduler.CosineAnnealingLR(opt1, T_max=2, eta_min=1e-6)
-            m, _ = train_stage(m, t_loader, v_loader, crit, opt1, sch1, epochs=2, stage_name="s1")
-
-            m  = unfreeze_last_blocks(m, n_blocks=n_blocks)
-            bp = [p for p in m.features.parameters()   if p.requires_grad]
-            hp = [p for p in m.classifier.parameters() if p.requires_grad]
-            opt2 = optim.AdamW(
-                [{"params": bp, "lr": backbone_lr}, {"params": hp, "lr": head_lr}],
-                weight_decay=weight_decay,
-            )
-            sch2 = optim.lr_scheduler.CosineAnnealingLR(opt2, T_max=4, eta_min=1e-7)
-            m, hist = train_stage(m, t_loader, v_loader, crit, opt2, sch2, epochs=4, stage_name="s2")
-
-        val_auc = float(hist["val_auc"].max()) if not hist["val_auc"].isna().all() else 0.0
-
-        del m
-        free_device_cache(cfg.device)
-        return val_auc
-
-    study = optuna.create_study(
-        direction="maximize",
-        study_name="cardiomegaly_hpo",
-        sampler=optuna.samplers.TPESampler(seed=cfg.seed),
-        pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=2),
-    )
-
-    print(f"Starting Optuna search — {n_trials} trials × 6 quick epochs each.")
-    print(f"Device: {cfg.device}. Est. time: {n_trials * 1.5:.0f}–{n_trials * 2:.0f} min on MPS.\n")
-
-    study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
-
-    best = study.best_trial
-    print(f"\n{'='*55}")
-    print(f"  Best val AUC : {best.value:.4f}  (trial #{best.number})")
-    print(f"  Best params  :")
-    for k, v in best.params.items():
-        print(f"    {k:>15}: {v}")
-
-    return study
-
-
-def apply_best_params(study, train_ds, val_ds, test_ds, config=None):
-    """Write Optuna best params back to CFG and rebuild DataLoaders.
-
-    Returns
-    ───────
-    (train_loader, val_loader, test_loader, n_blocks)
-    """
-    cfg = config or CFG
-
-    cfg.head_lr      = study.best_params["head_lr"]
-    cfg.backbone_lr  = study.best_params["backbone_lr"]
-    cfg.weight_decay = study.best_params["weight_decay"]
-    cfg.dropout      = study.best_params["dropout"]
-    cfg.batch_size   = study.best_params["batch_size"]
-    n_blocks         = study.best_params["n_blocks"]
-
-    _kw          = dict(num_workers=cfg.num_workers, pin_memory=False)
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True,  **_kw)
-    val_loader   = DataLoader(val_ds,   batch_size=cfg.batch_size, shuffle=False, **_kw)
-    test_loader  = DataLoader(test_ds,  batch_size=cfg.batch_size, shuffle=False, **_kw)
-
-    print(f"Config updated — batch_size={cfg.batch_size}, n_blocks={n_blocks}")
-    return train_loader, val_loader, test_loader, n_blocks
+    thr_single, _ = find_best_threshold(y_true, y_prob)
+    thr_boot      = bootstrap_threshold(y_true, y_prob, n_boot=cfg.n_bootstrap, seed=cfg.seed)
+    m_single = metrics_at_threshold(y_true, y_prob, thr_single)
+    m_boot   = metrics_at_threshold(y_true, y_prob, thr_boot)
+    chosen = thr_boot if m_boot["composite"] >= m_single["composite"] - 0.005 else thr_single
+    return float(chosen), m_single, m_boot
 
 
 # ---------------------------------------------------------------------------
 # Saving results
 # ---------------------------------------------------------------------------
-
 def save_results(
-    model: CardiomegalyModel,
+    models_list: List[Tuple[int, nn.Module, float, str]],
     history: pd.DataFrame,
     val_out: dict,
     test_out: dict,
     best_threshold: float,
     output_dir: str,
     model_name: str = "model",
-    n_blocks: int = 7,
     config=None,
 ) -> None:
-    """Persist model weights, history, metrics, per-image predictions, and global run log.
+    """Persist per-seed checkpoints, history, metrics, predictions, and global log.
 
-    Parameters
-    ──────────
-    model        : trained CardiomegalyModel
-    history      : training history DataFrame
-    val_out      : dict from run_epoch_tta on validation split
-    test_out     : dict from run_epoch_tta on test split
-    best_threshold: decision threshold chosen from validation set
-    output_dir   : folder for this run's artefacts
-    model_name   : human-readable name shown in the results log
-    n_blocks     : number of backbone blocks fine-tuned (logged in table)
-    config       : Config instance (defaults to global CFG)
+    Per-seed `.pth` files are already written by `train_one_seed`; here we
+    only re-save them under the conventional name and write the metrics +
+    per-image prediction CSVs.
     """
-    from src.config import CFG
     cfg = config or CFG
-
     os.makedirs(output_dir, exist_ok=True)
 
-    torch.save(model.state_dict(), os.path.join(output_dir, "best_model.pth"))
-    history.to_csv(os.path.join(output_dir, "training_history.csv"), index=False)
+    # ── Metric files + per-image predictions ─────────────────────────────
+    val_metrics  = metrics_at_threshold(val_out["y_true"],  val_out["y_prob"],  best_threshold)
+    test_metrics = metrics_at_threshold(test_out["y_true"], test_out["y_prob"], best_threshold)
 
-    val_metrics, test_metrics = None, None
-    for split_name, out in [("val", val_out), ("test", test_out)]:
-        metrics = compute_basic_metrics(out["y_true"], out["y_prob"], best_threshold)
-        if split_name == "val":
-            val_metrics = metrics
-        else:
-            test_metrics = metrics
+    for split_name, metrics in [("val", val_metrics), ("test", test_metrics)]:
         with open(os.path.join(output_dir, f"{split_name}_metrics_final.json"), "w") as f:
             json.dump(metrics, f, indent=2)
+
+    history.to_csv(os.path.join(output_dir, "training_history.csv"), index=False)
+
+    for split_name, out in [("val", val_out), ("test", test_out)]:
+        y_true = out["y_true"].astype(int)
+        y_pred = (out["y_prob"] >= best_threshold).astype(int)
         pd.DataFrame({
-            "image_name": out["names"],
-            "y_true":     out["y_true"].astype(int),
-            "prob":       out["y_prob"],
-            "pred":       (out["y_prob"] >= best_threshold).astype(int),
+            "filename": out["names"],
+            "y_true":   y_true,
+            "prob":     out["y_prob"],
+            "pred":     y_pred,
+            "correct":  (y_pred == y_true).astype(int),
         }).to_csv(os.path.join(output_dir, f"{split_name}_predictions.csv"), index=False)
+
+    # ── Ensemble manifest (which seeds + which checkpoints) ──────────────
+    pd.DataFrame([
+        {"seed": s, "best_val_auc": auc, "checkpoint": ckpt}
+        for (s, _, auc, ckpt) in models_list
+    ]).to_csv(os.path.join(output_dir, "ensemble_manifest.csv"), index=False)
 
     print(f"Results saved → {output_dir}")
 
@@ -536,6 +488,6 @@ def save_results(
         val_metrics=val_metrics,
         test_metrics=test_metrics,
         config=cfg,
-        n_blocks=n_blocks,
+        n_seeds=len(models_list),
         log_path=cfg.results_log_path,
     )

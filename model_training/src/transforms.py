@@ -1,58 +1,52 @@
 from __future__ import annotations
 
-from typing import List
+from typing import List, Tuple
 
 import torchvision.transforms as T
+from PIL import Image
 
 from src.config import CFG
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers
+# PIL helpers (TTA expects PIL → PIL transforms; xrv normalisation is applied
+# downstream inside the Dataset).
 # ---------------------------------------------------------------------------
-
-def _norm_params(mean: float, std: float):
-    """Return (mean_list, std_list) for T.Normalize.
-
-    Uses dataset-computed stats when CFG.use_dataset_stats is True,
-    otherwise falls back to ImageNet defaults.
-    """
-    if CFG.use_dataset_stats:
-        return [mean] * 3, [std] * 3
-    return [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
+def _pil_hflip(img: Image.Image) -> Image.Image:
+    return img.transpose(Image.FLIP_LEFT_RIGHT)
 
 
 # ---------------------------------------------------------------------------
 # Training and evaluation transforms
 # ---------------------------------------------------------------------------
+def make_transforms(img_size: int | None = None) -> Tuple[T.Compose, T.Compose]:
+    """Return (train_transform, eval_transform) PIL-space pipelines.
 
-def make_transforms(train_mean: float, train_std: float):
-    """Return (train_transform, eval_transform) torchvision pipelines.
+    All transforms produce a PIL grayscale image of size (img_size, img_size).
+    The downstream Dataset converts it to a single-channel xrv-normalised
+    tensor in [-1024, 1024].
 
-    Train pipeline: resize + random crop, horizontal flip, affine, colour jitter,
-                    Gaussian blur, random autocontrast, grayscale→3ch, normalise.
-    Eval pipeline:  resize, grayscale→3ch, normalise.
+    Train pipeline: small affine, mild jitter, light hflip; random erasing
+                    happens after xrv normalisation inside the Dataset.
+    Eval pipeline:  deterministic resize.
     """
-    mean, std = _norm_params(train_mean, train_std)
+    img_size = img_size if img_size is not None else CFG.img_size
 
     train_tf = T.Compose([
-        T.Resize((CFG.img_size + 20, CFG.img_size + 20)),
-        T.RandomCrop((CFG.img_size, CFG.img_size)),
+        T.Resize((img_size + 16, img_size + 16)),
+        T.RandomCrop((img_size, img_size)),
         T.RandomHorizontalFlip(p=0.5),
-        T.RandomAffine(degrees=10, translate=(0.05, 0.05), scale=(0.95, 1.05)),
-        T.RandomApply([T.ColorJitter(brightness=0.2, contrast=0.2)], p=0.4),
-        T.RandomApply([T.GaussianBlur(kernel_size=3, sigma=(0.1, 1.0))], p=0.2),
-        T.RandomApply([T.RandomAutocontrast()], p=0.3),
-        T.Grayscale(num_output_channels=3),
-        T.ToTensor(),
-        T.Normalize(mean=mean, std=std),
+        T.RandomAffine(
+            degrees=8,
+            translate=(0.04, 0.04),
+            scale=(0.95, 1.05),
+            fill=0,
+        ),
+        T.ColorJitter(brightness=0.15, contrast=0.15),
     ])
 
     eval_tf = T.Compose([
-        T.Resize((CFG.img_size, CFG.img_size)),
-        T.Grayscale(num_output_channels=3),
-        T.ToTensor(),
-        T.Normalize(mean=mean, std=std),
+        T.Resize((img_size, img_size)),
     ])
 
     return train_tf, eval_tf
@@ -61,31 +55,24 @@ def make_transforms(train_mean: float, train_std: float):
 # ---------------------------------------------------------------------------
 # Test-time augmentation (TTA) transforms
 # ---------------------------------------------------------------------------
+def make_tta_transforms(img_size: int | None = None) -> List[T.Compose]:
+    """Six deterministic PIL-space transforms.
 
-def make_tta_transforms(train_mean: float, train_std: float) -> List:
-    """Three-view TTA: centre-crop at three scales.
-
-    Returns a list of three transforms (standard, slightly zoomed, more zoomed).
-    Predictions are averaged across all three views in run_epoch_tta.
+    All end with a resized PIL image ready for xrv_normalize_np().
+    Predictions are averaged across all passes (in logit space) inside
+    `tta_predict` / `tta_predict_ensemble`.
     """
-    mean, std = _norm_params(train_mean, train_std)
-
-    def _make_crop(resize_to: int):
-        return T.Compose([
-            T.Resize((resize_to, resize_to)),
-            T.CenterCrop((CFG.img_size, CFG.img_size)),
-            T.Grayscale(num_output_channels=3),
-            T.ToTensor(),
-            T.Normalize(mean=mean, std=std),
-        ])
+    img_size = img_size if img_size is not None else CFG.img_size
+    size = (img_size, img_size)
 
     return [
-        T.Compose([
-            T.Resize((CFG.img_size, CFG.img_size)),
-            T.Grayscale(num_output_channels=3),
-            T.ToTensor(),
-            T.Normalize(mean=mean, std=std),
-        ]),
-        _make_crop(CFG.img_size + 12),
-        _make_crop(CFG.img_size + 20),
+        T.Compose([T.Resize(size)]),
+        T.Compose([T.Resize(size), T.Lambda(_pil_hflip)]),
+        T.Compose([T.Resize((img_size + 20, img_size + 20)), T.CenterCrop(size)]),
+        T.Compose([T.Resize((img_size - 20, img_size - 20)),
+                   T.Pad(10, fill=0), T.CenterCrop(size)]),
+        T.Compose([T.Resize(size),
+                   T.RandomAffine(degrees=(6, 6), fill=0)]),
+        T.Compose([T.Resize(size),
+                   T.RandomAffine(degrees=(-6, -6), fill=0)]),
     ]
