@@ -123,7 +123,7 @@ function HomePage() {
             AI-assisted screening · Research preview
           </div>
           <h1 className="text-balance text-4xl font-bold tracking-tight sm:text-5xl">
-            Cardiomegaly detection from{" "}
+            Cardiomegaly detection{" "}
             <span
               className="bg-clip-text text-transparent"
               style={{ backgroundImage: "var(--gradient-primary)" }}
