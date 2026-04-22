@@ -33,10 +33,10 @@ export function NeuralNetworkAnim() {
 
   return (
     <div className="relative aspect-[5/4] w-full">
-      {/* Glow backdrop */}
+      {/* Subtle glow backdrop */}
       <div
         aria-hidden
-        className="absolute inset-0 -z-10 rounded-3xl opacity-60 blur-3xl"
+        className="absolute inset-0 -z-10 rounded-3xl opacity-25 blur-3xl dark:opacity-15"
         style={{ background: "var(--gradient-primary)" }}
       />
 
@@ -57,7 +57,7 @@ export function NeuralNetworkAnim() {
             <stop offset="100%" stopColor="var(--primary)" />
           </radialGradient>
           <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur stdDeviation="3" result="b" />
+            <feGaussianBlur stdDeviation="1.2" result="b" />
             <feMerge>
               <feMergeNode in="b" />
               <feMergeNode in="SourceGraphic" />

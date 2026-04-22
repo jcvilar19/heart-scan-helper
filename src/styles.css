@@ -132,9 +132,9 @@
   --popover: oklch(0.21 0.025 240);
   --popover-foreground: oklch(0.96 0.005 230);
 
-  --primary: oklch(0.78 0.13 210);
+  --primary: oklch(0.66 0.08 230);
   --primary-foreground: oklch(0.16 0.02 240);
-  --primary-glow: oklch(0.85 0.12 200);
+  --primary-glow: oklch(0.74 0.07 220);
 
   --secondary: oklch(0.27 0.03 240);
   --secondary-foreground: oklch(0.96 0.005 230);
@@ -154,9 +154,9 @@
 
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 14%);
-  --ring: oklch(0.78 0.13 210);
+  --ring: oklch(0.66 0.08 230);
 
-  --chart-1: oklch(0.78 0.13 210);
+  --chart-1: oklch(0.66 0.08 230);
   --chart-2: oklch(0.72 0.15 155);
   --chart-3: oklch(0.82 0.16 75);
   --chart-4: oklch(0.7 0.2 25);
@@ -164,12 +164,12 @@
 
   --sidebar: oklch(0.19 0.025 240);
   --sidebar-foreground: oklch(0.96 0.005 230);
-  --sidebar-primary: oklch(0.78 0.13 210);
+  --sidebar-primary: oklch(0.66 0.08 230);
   --sidebar-primary-foreground: oklch(0.16 0.02 240);
   --sidebar-accent: oklch(0.27 0.04 220);
   --sidebar-accent-foreground: oklch(0.96 0.005 230);
   --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.78 0.13 210);
+  --sidebar-ring: oklch(0.66 0.08 230);
 
   --gradient-primary: linear-gradient(135deg, var(--primary), var(--primary-glow));
   --gradient-surface: linear-gradient(180deg,
