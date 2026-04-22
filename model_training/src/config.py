@@ -39,13 +39,22 @@ class Config:
     weight_decay: float = 1e-4
     grad_clip:    float = 1.0
 
+    # ── Data augmentation ────────────────────────────────────────────────
+    # Mixup: interpolates two samples and their labels in every training batch.
+    #   mixup_alpha > 0 enables it; λ ~ Beta(α, α).  0 = disabled.
+    #   Typical range: 0.2 – 0.4.
+    mixup_alpha:     float = 0.0
+    # Label smoothing: prevents overconfidence by softening hard {0,1} targets.
+    #   y_smooth = y*(1-ε) + 0.5*ε.  0 = disabled.  Typical range: 0.05 – 0.15.
+    label_smoothing: float = 0.0
+
     # ── Architecture ─────────────────────────────────────────────────────
     # Options: "densenet121" | "mobilenet_v3_large" | "efficientnet_b0" | "efficientnet_b3"
     # densenet121       — torchxrayvision DenseNet-121, pretrained on ~1M chest X-rays (recommended)
     # mobilenet_v3_large — torchvision MobileNetV3-Large, pretrained on ImageNet (faster, lighter)
     # efficientnet_b0   — torchvision EfficientNet-B0,  pretrained on ImageNet (good accuracy/size trade-off)
     # efficientnet_b3   — torchvision EfficientNet-B3,  pretrained on ImageNet (higher accuracy, more params)
-    backbone: str = "densenet121"
+    backbone: str = "efficientnet_b0"
 
     # ── Ensemble ─────────────────────────────────────────────────────────
     # True:  train one model per entry in `seeds` and average predictions
@@ -54,6 +63,14 @@ class Config:
 
     # ── Multi-seed ensemble ──────────────────────────────────────────────
     seeds: List[int] = field(default_factory=lambda: [42, 7, 2024])
+
+    # ── Loss function ─────────────────────────────────────────────────────
+    # False: standard BCE  |  True: 0.5*BCE + 0.5*(1 - soft_composite)
+    use_composite_loss:    bool  = False
+    # Blend weight α: α·BCE + (1-α)·(1-soft_composite).  0 = pure composite, 1 = pure BCE.
+    composite_loss_alpha:  float = 0.5
+    # Temperature for the pairwise-sigmoid soft-AUC term (higher → sharper ranking signal)
+    composite_loss_gamma:  float = 1.0
 
     # ── Inference ────────────────────────────────────────────────────────
     tta_passes:  int = 6           # number of deterministic TTA transforms (max 6)

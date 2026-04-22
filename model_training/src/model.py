@@ -28,7 +28,7 @@ def build_model(backbone: str | None = None) -> nn.Module:
     from src.config import CFG  # lazy to avoid circular import at module load
     backbone = backbone or CFG.backbone
 
-    if backbone == "densenet121":
+    if backbone in ("densenet121", "densenet121-res224-all"):
         model = xrv.models.DenseNet(weights="densenet121-res224-all")
         model.op_threshs = None      # raw logits at every output
         model.apply_sigmoid = False  # belt + suspenders
@@ -84,9 +84,53 @@ def freeze_backbone(model: nn.Module) -> nn.Module:
 
 
 def unfreeze_all(model: nn.Module) -> nn.Module:
-    """Unfreeze every parameter (used in stage 2)."""
+    """Unfreeze every parameter. Kept for backwards compatibility; prefer partial_unfreeze."""
     for p in model.parameters():
         p.requires_grad = True
+    return model
+
+
+# DenseNet-121 block groups: (block_name, transition_name) for blocks 1–4
+_DENSENET_BLOCK_GROUPS = [
+    ("denseblock1", "transition1"),
+    ("denseblock2", "transition2"),
+    ("denseblock3", "transition3"),
+    ("denseblock4", "norm5"),
+]
+
+
+def partial_unfreeze(model: nn.Module, frozen_blocks: int = 0) -> nn.Module:
+    """Selectively unfreeze the model for stage-2 fine-tuning.
+
+    frozen_blocks — how many feature blocks to keep frozen:
+        0  → unfreeze everything (same as unfreeze_all)
+        1  → keep denseblock1 (+transition1) frozen
+        2  → keep denseblock1–2 frozen
+        3  → keep denseblock1–3 frozen
+        4  → keep all dense blocks frozen (only classifier trains)
+
+    For torchvision models (MobileNet, EfficientNet) the index refers to the
+    numbered child modules of model.features (typically 16–18 entries).
+    """
+    for p in model.parameters():
+        p.requires_grad = True
+
+    if frozen_blocks <= 0:
+        return model
+
+    if isinstance(model, xrv.models.DenseNet):
+        frozen_names: set[str] = set()
+        for i in range(min(frozen_blocks, len(_DENSENET_BLOCK_GROUPS))):
+            frozen_names.update(_DENSENET_BLOCK_GROUPS[i])
+        for name, module in model.features.named_children():
+            if name in frozen_names:
+                for p in module.parameters():
+                    p.requires_grad = False
+    else:
+        for module in list(model.features.children())[:frozen_blocks]:
+            for p in module.parameters():
+                p.requires_grad = False
+
     return model
 
 

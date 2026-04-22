@@ -19,11 +19,103 @@ from src.model import (
     build_model,
     cardio_logit,
     freeze_backbone,
+    partial_unfreeze,
     trainable_params,
     unfreeze_all,
 )
 from src.transforms import make_tta_transforms
 from src.utils import free_device_cache, log_run, set_seed
+
+
+# ---------------------------------------------------------------------------
+# Mixup helper
+# ---------------------------------------------------------------------------
+def mixup_data(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    alpha: float = 0.4,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Return a randomly mixed batch and the corresponding soft labels.
+
+    λ ~ Beta(α, α).  When α ≤ 0 the original batch is returned unchanged.
+
+    Args:
+        x:     Image tensor  (B, C, H, W)  on the training device.
+        y:     Label tensor  (B,)  – may already be soft (e.g. after smoothing).
+        alpha: Beta distribution parameter.  Typical: 0.2 – 0.4.
+    """
+    if alpha <= 0:
+        return x, y
+    lam = float(np.random.beta(alpha, alpha))
+    idx = torch.randperm(x.size(0), device=x.device)
+    mixed_x = lam * x + (1.0 - lam) * x[idx]
+    mixed_y = lam * y + (1.0 - lam) * y[idx]
+    return mixed_x, mixed_y
+
+
+# ---------------------------------------------------------------------------
+# Differentiable composite loss
+# ---------------------------------------------------------------------------
+class SoftCompositeLoss(nn.Module):
+    """Differentiable approximation of composite = 0.5·AUC + 0.25·sens + 0.25·spec.
+
+    Minimises ``1 - soft_composite``, blended with standard BCE for stability.
+
+    Soft-AUC
+        Pairwise sigmoid over all (positive, negative) logit pairs in the batch:
+        ``soft_auc = mean( σ(γ · (logit⁺ − logit⁻)) )``
+        where γ (``auc_gamma``) is a sharpness temperature.
+
+    Soft-sens / soft-spec
+        ``soft_sens = mean( σ(logit) | y=1 )``
+        ``soft_spec = mean( 1 − σ(logit) | y=0 )``
+
+    Total loss
+        ``α · BCE  +  (1 − α) · (1 − soft_composite)``
+
+    Args:
+        alpha:     Weight of BCE in the blend (0 = pure composite, 1 = pure BCE).
+        auc_gamma: Temperature for the pairwise sigmoid (higher → sharper AUC signal).
+        eps:       Numerical stability floor.
+    """
+
+    def __init__(self, alpha: float = 0.5, auc_gamma: float = 1.0, eps: float = 1e-7):
+        super().__init__()
+        self.alpha     = alpha
+        self.auc_gamma = auc_gamma
+        self.eps       = eps
+        self._bce      = nn.BCEWithLogitsLoss()
+
+    def forward(self, logit: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        bce_loss = self._bce(logit, target)
+
+        prob     = torch.sigmoid(logit)
+        # Use > 0.5 so the masks work correctly for both hard labels {0,1}
+        # and soft targets produced by mixup or label smoothing.
+        pos_mask = (target > 0.5)
+        neg_mask = ~pos_mask
+        n_pos    = pos_mask.sum()
+        n_neg    = neg_mask.sum()
+
+        # ── Soft AUC (pairwise) ──────────────────────────────────────────────
+        if n_pos > 0 and n_neg > 0:
+            pos_logits = logit[pos_mask]                                  # (n_pos,)
+            neg_logits = logit[neg_mask]                                  # (n_neg,)
+            diff       = pos_logits.unsqueeze(1) - neg_logits.unsqueeze(0)  # (n_pos, n_neg)
+            soft_auc   = torch.sigmoid(self.auc_gamma * diff).mean()
+        else:
+            soft_auc = torch.tensor(0.5, device=logit.device, dtype=logit.dtype)
+
+        # ── Soft sensitivity / specificity ──────────────────────────────────
+        soft_sens = prob[pos_mask].mean() if n_pos > 0 else torch.tensor(
+            0.0, device=logit.device, dtype=logit.dtype)
+        soft_spec = (1.0 - prob[neg_mask]).mean() if n_neg > 0 else torch.tensor(
+            0.0, device=logit.device, dtype=logit.dtype)
+
+        soft_composite  = 0.5 * soft_auc + 0.25 * soft_sens + 0.25 * soft_spec
+        composite_loss  = 1.0 - soft_composite
+
+        return self.alpha * bce_loss + (1.0 - self.alpha) * composite_loss
 
 
 # ---------------------------------------------------------------------------
@@ -36,11 +128,16 @@ def run_one_epoch(
     optimizer: Optional[optim.Optimizer] = None,
     scaler: Optional[torch.cuda.amp.GradScaler] = None,
     grad_clip: Optional[float] = None,
+    mixup_alpha: float = 0.0,
+    label_smoothing: float = 0.0,
 ) -> dict:
     """Single forward pass over *loader*.
 
-    Pass ``optimizer=None`` for evaluation. Expects (image, label, name) batches.
-    Uses CUDA AMP when available.
+    Pass ``optimizer=None`` for evaluation (mixup and smoothing are skipped).
+    Expects (image, label, name) batches. Uses CUDA AMP when available.
+
+    Hard original labels are always accumulated for metric computation;
+    the (potentially mixed + smoothed) soft labels are only used for the loss.
     """
     is_train = optimizer is not None
     model.train(is_train)
@@ -53,6 +150,17 @@ def run_one_epoch(
     for x, y, names in loader:
         x = x.to(CFG.device, non_blocking=pin)
         y = y.to(CFG.device, non_blocking=pin)
+
+        # Keep hard labels for metric accumulation (before any augmentation)
+        y_hard = y.detach().clone()
+
+        if is_train:
+            # Mixup: interpolate two samples + their labels in-place
+            if mixup_alpha > 0.0:
+                x, y = mixup_data(x, y, alpha=mixup_alpha)
+            # Label smoothing: y_smooth = y*(1-ε) + 0.5*ε
+            if label_smoothing > 0.0:
+                y = y * (1.0 - label_smoothing) + 0.5 * label_smoothing
 
         with torch.set_grad_enabled(is_train):
             with amp_ctx:
@@ -75,7 +183,7 @@ def run_one_epoch(
         if loss is not None:
             losses.append(loss.item())
         logits_all.append(logit.detach().float().cpu().numpy())
-        labels_all.append(y.detach().float().cpu().numpy())
+        labels_all.append(y_hard.float().cpu().numpy())   # always hard labels
         names_all.extend(list(names))
 
     y_true  = np.concatenate(labels_all)
@@ -83,12 +191,24 @@ def run_one_epoch(
     y_prob  = 1.0 / (1.0 + np.exp(-y_logit))
     auc     = roc_auc_score(y_true, y_prob) if len(np.unique(y_true)) > 1 else float("nan")
 
+    # Per-epoch metrics at threshold=0.5 (used for progress logging)
+    y_pred = (y_prob >= 0.5).astype(int)
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
+    acc  = float((tp + tn) / (tp + tn + fp + fn)) if (tp + tn + fp + fn) > 0 else float("nan")
+    sens = float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
+    spec = float(tn / (tn + fp)) if (tn + fp) > 0 else 0.0
+    composite = 0.5 * (auc if not np.isnan(auc) else 0.0) + 0.25 * sens + 0.25 * spec
+
     return {
-        "loss":   float(np.mean(losses)) if losses else float("nan"),
-        "auc":    float(auc),
-        "y_true": y_true,
-        "y_prob": y_prob,
-        "names":  names_all,
+        "loss":      float(np.mean(losses)) if losses else float("nan"),
+        "auc":       float(auc),
+        "acc":       acc,
+        "sens":      sens,
+        "spec":      spec,
+        "composite": float(composite),
+        "y_true":    y_true,
+        "y_prob":    y_prob,
+        "names":     names_all,
     }
 
 
@@ -110,39 +230,79 @@ def train_one_seed(
     output_dir = output_dir or cfg.output_dir
     os.makedirs(output_dir, exist_ok=True)
 
-    print("\n" + "=" * 80)
-    print(f" Training with seed = {seed}")
-    print("=" * 80)
     set_seed(seed)
 
-    model     = build_model(cfg.backbone).to(cfg.device)
-    criterion = nn.BCEWithLogitsLoss()
+    model        = build_model(cfg.backbone).to(cfg.device)
+    total_params = sum(p.numel() for p in model.parameters())
+
+    print("\n" + "=" * 80)
+    print(f"  Seed    : {seed}")
+    print(f"  Model   : {model.__class__.__name__}  ({total_params:,} total params)")
+    print(f"  Backbone: {cfg.backbone}")
+    print(f"  Device  : {cfg.device}")
+    print("=" * 80)
+
+    if cfg.use_composite_loss:
+        criterion = SoftCompositeLoss(
+            alpha=cfg.composite_loss_alpha,
+            auc_gamma=cfg.composite_loss_gamma,
+        )
+        print(
+            f"  Loss    : SoftCompositeLoss  "
+            f"(α={cfg.composite_loss_alpha}, γ={cfg.composite_loss_gamma})"
+        )
+    else:
+        criterion = nn.BCEWithLogitsLoss()
+        print("  Loss    : BCEWithLogitsLoss")
+
+    mixup_alpha     = getattr(cfg, "mixup_alpha",     0.0)
+    label_smoothing = getattr(cfg, "label_smoothing", 0.0)
+    if mixup_alpha > 0:
+        print(f"  Mixup   : α={mixup_alpha}")
+    if label_smoothing > 0:
+        print(f"  Smoothing: ε={label_smoothing}")
+
     scaler    = torch.cuda.amp.GradScaler(enabled=(cfg.device == "cuda"))
     history: list[dict] = []
 
+    _aug_kw = dict(mixup_alpha=mixup_alpha, label_smoothing=label_smoothing)
+
     # ── Stage 1: frozen backbone, head-only warmup ─────────────────────────
     freeze_backbone(model)
+    n_trainable = sum(p.numel() for p in trainable_params(model))
+    print(f"\n  Stage 1 — all backbone blocks FROZEN  |  {n_trainable:,} trainable params")
     opt_frozen = optim.AdamW(
         trainable_params(model), lr=cfg.head_lr, weight_decay=cfg.weight_decay,
     )
-    n_trainable = sum(p.numel() for p in trainable_params(model))
-    print(f"[seed={seed}] Stage 1 (frozen): {n_trainable:,} trainable params")
     for ep in range(1, cfg.frozen_epochs + 1):
-        t = run_one_epoch(model, train_loader, criterion, opt_frozen, scaler)
+        t = run_one_epoch(model, train_loader, criterion, opt_frozen, scaler, **_aug_kw)
         v = run_one_epoch(model, val_loader, criterion)
         history.append({
             "seed": seed, "stage": "frozen", "epoch": ep,
             "train_loss": t["loss"], "train_auc": t["auc"],
-            "val_loss":   v["loss"], "val_auc":   v["auc"],
+            "train_acc": t["acc"], "train_composite": t["composite"],
+            "val_loss":  v["loss"], "val_auc":   v["auc"],
+            "val_acc":   v["acc"], "val_sens":   v["sens"],
+            "val_spec":  v["spec"], "val_composite": v["composite"],
             "lr": opt_frozen.param_groups[0]["lr"],
         })
         print(
             f"  [frozen] {ep}/{cfg.frozen_epochs}  "
-            f"train_loss={t['loss']:.4f}  val_auc={v['auc']:.4f}"
+            f"loss={t['loss']:.4f}  train_acc={t['acc']*100:.1f}%  |  "
+            f"val_auc={v['auc']:.4f}  val_acc={v['acc']*100:.1f}%  "
+            f"sens={v['sens']:.3f}  spec={v['spec']:.3f}  comp={v['composite']:.4f}"
         )
 
-    # ── Stage 2: full fine-tune with differential LRs + cosine schedule ───
-    unfreeze_all(model)
+    # ── Stage 2: partial or full fine-tune ───────────────────────────────
+    frozen_blocks = getattr(cfg, "frozen_blocks", 0)
+    partial_unfreeze(model, frozen_blocks)
+    n_trainable = sum(p.numel() for p in trainable_params(model))
+    if frozen_blocks == 0:
+        stage2_label = "all blocks UNFROZEN"
+    else:
+        stage2_label = f"{frozen_blocks} block(s) still FROZEN"
+    print(f"\n  Stage 2 — {stage2_label}  |  {n_trainable:,} trainable params")
+
     opt_ft = optim.AdamW(
         [
             {"params": model.features.parameters(),   "lr": cfg.backbone_lr},
@@ -153,24 +313,27 @@ def train_one_seed(
     sched = optim.lr_scheduler.CosineAnnealingLR(
         opt_ft, T_max=cfg.finetune_epochs, eta_min=cfg.backbone_lr * 0.01,
     )
-    n_trainable = sum(p.numel() for p in trainable_params(model))
-    print(f"[seed={seed}] Stage 2 (full):  {n_trainable:,} trainable params")
 
     best_auc, best_state, patience_ctr = -1.0, None, 0
     for ep in range(1, cfg.finetune_epochs + 1):
-        t = run_one_epoch(model, train_loader, criterion, opt_ft, scaler)
+        t = run_one_epoch(model, train_loader, criterion, opt_ft, scaler, **_aug_kw)
         v = run_one_epoch(model, val_loader, criterion)
         sched.step()
         history.append({
             "seed": seed, "stage": "finetune", "epoch": ep,
             "train_loss": t["loss"], "train_auc": t["auc"],
-            "val_loss":   v["loss"], "val_auc":   v["auc"],
+            "train_acc": t["acc"], "train_composite": t["composite"],
+            "val_loss":  v["loss"], "val_auc":   v["auc"],
+            "val_acc":   v["acc"], "val_sens":   v["sens"],
+            "val_spec":  v["spec"], "val_composite": v["composite"],
             "lr": opt_ft.param_groups[0]["lr"],
         })
         print(
             f"  [ft]     {ep}/{cfg.finetune_epochs}  "
-            f"train_loss={t['loss']:.4f}  val_auc={v['auc']:.4f}  "
-            f"lr_bb={opt_ft.param_groups[0]['lr']:.2e}"
+            f"loss={t['loss']:.4f}  train_acc={t['acc']*100:.1f}%  |  "
+            f"val_auc={v['auc']:.4f}  val_acc={v['acc']*100:.1f}%  "
+            f"sens={v['sens']:.3f}  spec={v['spec']:.3f}  comp={v['composite']:.4f}  "
+            f"lr={opt_ft.param_groups[0]['lr']:.2e}"
         )
 
         if v["auc"] > best_auc:
@@ -211,6 +374,8 @@ def train_ensemble(
     seeds = seeds if seeds is not None else cfg.seeds
     output_dir = output_dir or cfg.output_dir
 
+    print(f"  ENSEMBLE TRAINING STARTED")
+
     models, all_history = [], []
     for seed in seeds:
         m, auc, ckpt, hist = train_one_seed(
@@ -224,11 +389,20 @@ def train_ensemble(
     history_df = pd.DataFrame(all_history)
     history_df.to_csv(os.path.join(output_dir, "training_history.csv"), index=False)
 
-    print("\n" + "=" * 80)
-    print("Per-seed best val AUC:")
+    frozen_blocks = getattr(cfg, "frozen_blocks", 0)
+    stage2_label  = "all blocks unfrozen" if frozen_blocks == 0 else f"{frozen_blocks} block(s) frozen"
+
+    print("\n" + "═" * 80)
+    print(f"  ENSEMBLE COMPLETE")
+    print(f"  Backbone      : {cfg.backbone}")
+    print(f"  Frozen blocks : {frozen_blocks}  ({stage2_label} in Stage 2)")
+    print(f"  Seeds trained : {len(models)}")
+    print("  Per-seed best val AUC:")
     for seed, _, auc, _ in models:
-        print(f"  seed {seed}: {auc:.4f}")
-    print("=" * 80)
+        print(f"    seed {seed:>5} : {auc:.4f}")
+    best_seed = max(models, key=lambda x: x[2])
+    print(f"  Best seed     : {best_seed[0]}  (AUC={best_seed[2]:.4f})")
+    print("═" * 80)
 
     return models, history_df
 
