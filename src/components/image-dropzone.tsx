@@ -59,10 +59,7 @@ export function ImageDropzone({ onFiles, disabled }: Props) {
           disabled && "pointer-events-none opacity-60",
         )}
       >
-        <span
-          className="mb-4 flex h-14 w-14 items-center justify-center rounded-full text-primary-foreground shadow-[var(--shadow-elegant)] transition-transform group-hover:scale-110"
-          style={{ background: "var(--gradient-primary)" }}
-        >
+        <span className="mb-4 flex h-14 w-14 items-center justify-center rounded-full border border-border bg-accent text-primary transition-transform group-hover:scale-105">
           <UploadCloud className="h-7 w-7" />
         </span>
         <p className="text-base font-semibold text-foreground">
