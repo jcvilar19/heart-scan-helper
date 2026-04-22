@@ -39,6 +39,19 @@ class Config:
     weight_decay: float = 1e-4
     grad_clip:    float = 1.0
 
+    # ── Architecture ─────────────────────────────────────────────────────
+    # Options: "densenet121" | "mobilenet_v3_large" | "efficientnet_b0" | "efficientnet_b3"
+    # densenet121       — torchxrayvision DenseNet-121, pretrained on ~1M chest X-rays (recommended)
+    # mobilenet_v3_large — torchvision MobileNetV3-Large, pretrained on ImageNet (faster, lighter)
+    # efficientnet_b0   — torchvision EfficientNet-B0,  pretrained on ImageNet (good accuracy/size trade-off)
+    # efficientnet_b3   — torchvision EfficientNet-B3,  pretrained on ImageNet (higher accuracy, more params)
+    backbone: str = "densenet121"
+
+    # ── Ensemble ─────────────────────────────────────────────────────────
+    # True:  train one model per entry in `seeds` and average predictions
+    # False: train a single model using only `seed` (faster experimentation)
+    use_ensemble: bool = True
+
     # ── Multi-seed ensemble ──────────────────────────────────────────────
     seeds: List[int] = field(default_factory=lambda: [42, 7, 2024])
 

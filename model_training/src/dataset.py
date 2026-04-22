@@ -14,14 +14,37 @@ import torchxrayvision as xrv
 
 
 # ---------------------------------------------------------------------------
-# xrv normalisation
+# Normalisation functions (one per backbone family)
 # ---------------------------------------------------------------------------
 def xrv_normalize_np(pil_img: Image.Image) -> torch.Tensor:
-    """PIL grayscale → (1, H, W) float tensor in [-1024, 1024]."""
+    """PIL grayscale → (1, H, W) float tensor in [-1024, 1024] (torchxrayvision)."""
     arr = np.array(pil_img, dtype=np.float32)          # (H, W) in [0, 255]
     arr = xrv.datasets.normalize(arr, 255)             # → [-1024, 1024]
     arr = arr[None, ...]                               # (1, H, W)
     return torch.from_numpy(arr).float()
+
+
+_IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
+_IMAGENET_STD  = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
+
+
+def imagenet_normalize_np(pil_img: Image.Image) -> torch.Tensor:
+    """PIL grayscale → (3, H, W) float tensor normalized with ImageNet stats.
+
+    The single grayscale channel is replicated to 3 channels so that ImageNet-
+    pretrained backbones (MobileNet, EfficientNet) receive the expected input shape.
+    """
+    arr = np.array(pil_img, dtype=np.float32) / 255.0           # [0, 1]
+    arr = np.stack([arr, arr, arr], axis=0)                      # (3, H, W)
+    arr = (arr - _IMAGENET_MEAN) / _IMAGENET_STD
+    return torch.from_numpy(arr).float()
+
+
+def get_normalize_fn(backbone: str):
+    """Return the correct normalization callable for the given backbone name."""
+    if backbone == "densenet121":
+        return xrv_normalize_np
+    return imagenet_normalize_np
 
 
 # ---------------------------------------------------------------------------
@@ -30,14 +53,23 @@ def xrv_normalize_np(pil_img: Image.Image) -> torch.Tensor:
 class ChestXrayDataset(Dataset):
     """Returns (image_tensor, label, filename) triples.
 
-    `image_tensor` is single-channel in the xrv-normalised range [-1024, 1024],
-    ready to be fed directly to a torchxrayvision DenseNet.
+    backbone controls the normalization applied after PIL transforms:
+        "densenet121"         → single-channel tensor in [-1024, 1024] (xrv)
+        any torchvision model → 3-channel tensor with ImageNet normalization
     """
 
-    def __init__(self, df: pd.DataFrame, pil_transform=None, use_erasing: bool = False) -> None:
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        pil_transform=None,
+        use_erasing: bool = False,
+        backbone: str | None = None,
+    ) -> None:
+        from src.config import CFG
         self.df = df.reset_index(drop=True)
         self.pil_transform = pil_transform
         self.use_erasing = use_erasing
+        self._normalize = get_normalize_fn(backbone or CFG.backbone)
         self._erasing = T.RandomErasing(
             p=0.5, scale=(0.02, 0.08), ratio=(0.3, 3.3), value=0
         )
@@ -50,7 +82,8 @@ class ChestXrayDataset(Dataset):
         img = Image.open(row["image_path"]).convert("L")
         if self.pil_transform is not None:
             img = self.pil_transform(img)
-        tensor = xrv_normalize_np(img)
+        normalize = getattr(self, "_normalize", xrv_normalize_np)
+        tensor = normalize(img)
         if self.use_erasing:
             tensor = self._erasing(tensor)
         label = torch.tensor(float(row["label"]), dtype=torch.float32)
@@ -68,10 +101,13 @@ class TTADataset(Dataset):
         df: pd.DataFrame,
         pil_transform,
         image_dir: Optional[str] = None,
+        backbone: str | None = None,
     ) -> None:
+        from src.config import CFG
         self.df = df.reset_index(drop=True)
         self.pil_transform = pil_transform
         self.image_dir = image_dir
+        self._normalize = get_normalize_fn(backbone or CFG.backbone)
 
     def __len__(self) -> int:
         return len(self.df)
@@ -84,7 +120,8 @@ class TTADataset(Dataset):
             path = os.path.join(self.image_dir, row["filename"])
         img = Image.open(path).convert("L")
         img = self.pil_transform(img)
-        tensor = xrv_normalize_np(img)
+        normalize = getattr(self, "_normalize", xrv_normalize_np)
+        tensor = normalize(img)
         label = float(row["label"]) if "label" in row and not pd.isna(row.get("label", np.nan)) else 0.0
         name = row["filename"] if "filename" in row else os.path.basename(path)
         return tensor, torch.tensor(label, dtype=torch.float32), name
@@ -99,9 +136,16 @@ class SubmissionDataset(Dataset):
     Returns (image_tensor, filename).
     """
 
-    def __init__(self, image_dir: str, pil_transform=None) -> None:
+    def __init__(
+        self,
+        image_dir: str,
+        pil_transform=None,
+        backbone: str | None = None,
+    ) -> None:
+        from src.config import CFG
         self.image_dir = image_dir
         self.pil_transform = pil_transform
+        self._normalize = get_normalize_fn(backbone or CFG.backbone)
         self.image_files = sorted(
             f for f in os.listdir(image_dir)
             if f.lower().endswith((".png", ".jpg", ".jpeg"))
@@ -115,5 +159,6 @@ class SubmissionDataset(Dataset):
         img = Image.open(os.path.join(self.image_dir, fname)).convert("L")
         if self.pil_transform is not None:
             img = self.pil_transform(img)
-        tensor = xrv_normalize_np(img)
+        normalize = getattr(self, "_normalize", xrv_normalize_np)
+        tensor = normalize(img)
         return tensor, fname

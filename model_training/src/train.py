@@ -115,7 +115,7 @@ def train_one_seed(
     print("=" * 80)
     set_seed(seed)
 
-    model     = build_model().to(cfg.device)
+    model     = build_model(cfg.backbone).to(cfg.device)
     criterion = nn.BCEWithLogitsLoss()
     scaler    = torch.cuda.amp.GradScaler(enabled=(cfg.device == "cuda"))
     history: list[dict] = []
@@ -231,6 +231,36 @@ def train_ensemble(
     print("=" * 80)
 
     return models, history_df
+
+
+# ---------------------------------------------------------------------------
+# Unified entry point (respects CFG.use_ensemble)
+# ---------------------------------------------------------------------------
+def train(
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    output_dir: Optional[str] = None,
+    config=None,
+) -> Tuple[List[Tuple[int, nn.Module, float, str]], pd.DataFrame]:
+    """Train and return (models_list, history_df) — same format as train_ensemble.
+
+    Behaviour is controlled by CFG.use_ensemble:
+        True  → delegates to train_ensemble (one model per seed in CFG.seeds)
+        False → trains a single model with CFG.seed and wraps result in the
+                same list format so the rest of the pipeline works unchanged.
+    """
+    cfg = config or CFG
+    if cfg.use_ensemble:
+        return train_ensemble(train_loader, val_loader, output_dir=output_dir, config=cfg)
+
+    m, auc, ckpt, hist = train_one_seed(
+        cfg.seed, train_loader, val_loader, output_dir=output_dir, config=cfg,
+    )
+    history_df = pd.DataFrame(hist)
+    history_df.to_csv(
+        os.path.join(output_dir or cfg.output_dir, "training_history.csv"), index=False,
+    )
+    return [(cfg.seed, m, auc, ckpt)], history_df
 
 
 # ---------------------------------------------------------------------------
