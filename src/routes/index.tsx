@@ -1,198 +1,230 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
-import { toast } from "sonner";
-import { Brain, ShieldCheck, Zap, Save } from "lucide-react";
+import {
+  ArrowRight,
+  Brain,
+  ShieldCheck,
+  Zap,
+  Activity,
+  Upload,
+  LineChart,
+  Stethoscope,
+} from "lucide-react";
 import { AppHeader } from "@/components/app-header";
-import { ImageDropzone } from "@/components/image-dropzone";
-import { ResultsGallery, type AnalysisItem } from "@/components/result-card";
 import { Button } from "@/components/ui/button";
-import { classifyImage } from "@/lib/classifier";
+import { NeuralNetworkAnim } from "@/components/neural-network-anim";
 import { useAuth } from "@/hooks/use-auth";
-import { supabase } from "@/integrations/supabase/client";
 
 export const Route = createFileRoute("/")({
-  component: HomePage,
+  component: LandingPage,
+  head: () => ({
+    meta: [
+      { title: "CardioScan — AI Cardiomegaly Detection from Chest X-rays" },
+      {
+        name: "description",
+        content:
+          "AI-assisted cardiomegaly screening from chest X-rays. Upload images and get a probability score in seconds.",
+      },
+      { property: "og:title", content: "CardioScan — AI Cardiomegaly Detection" },
+      {
+        property: "og:description",
+        content: "AI-assisted cardiomegaly screening from chest X-rays.",
+      },
+    ],
+  }),
 });
 
-function HomePage() {
+function LandingPage() {
   const { user } = useAuth();
-  const [items, setItems] = useState<AnalysisItem[]>([]);
-  const [saving, setSaving] = useState(false);
-
-  const allDone = useMemo(
-    () => items.length > 0 && items.every((i) => i.status === "done" || i.status === "error"),
-    [items],
-  );
-  const successful = useMemo(() => items.filter((i) => i.status === "done"), [items]);
-
-  const handleFiles = async (files: File[]) => {
-    const newItems: AnalysisItem[] = files.map((file) => ({
-      id: `${file.name}-${file.size}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      file,
-      previewUrl: URL.createObjectURL(file),
-      status: "pending",
-      notes: "",
-    }));
-
-    setItems((prev) => [...newItems, ...prev]);
-
-    // Process sequentially so the UI animates one at a time
-    for (const item of newItems) {
-      setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, status: "analyzing" } : i)));
-      try {
-        const result = await classifyImage(item.file);
-        setItems((prev) =>
-          prev.map((i) => (i.id === item.id ? { ...i, status: "done", result } : i)),
-        );
-      } catch (err) {
-        setItems((prev) =>
-          prev.map((i) =>
-            i.id === item.id ? { ...i, status: "error", error: (err as Error).message } : i,
-          ),
-        );
-      }
-    }
-  };
-
-  const handleRemove = (id: string) => {
-    setItems((prev) => {
-      const target = prev.find((i) => i.id === id);
-      if (target) URL.revokeObjectURL(target.previewUrl);
-      return prev.filter((i) => i.id !== id);
-    });
-  };
-
-  const handleClear = () => {
-    items.forEach((i) => URL.revokeObjectURL(i.previewUrl));
-    setItems([]);
-  };
-
-  const handleNotesChange = (id: string, notes: string) => {
-    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, notes } : i)));
-  };
-
-  const handleSave = async () => {
-    if (!user) {
-      toast.error("Please sign in to save results.");
-      return;
-    }
-    if (successful.length === 0) {
-      toast.info("Nothing to save yet.");
-      return;
-    }
-    setSaving(true);
-    try {
-      let saved = 0;
-      for (const item of successful) {
-        if (!item.result) continue;
-        const ext = item.file.name.split(".").pop() ?? "jpg";
-        const path = `${user.id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-        const { error: upErr } = await supabase.storage
-          .from("xray-uploads")
-          .upload(path, item.file, { contentType: item.file.type, upsert: false });
-        if (upErr) throw upErr;
-
-        const { error: insErr } = await supabase.from("classifications").insert({
-          user_id: user.id,
-          image_path: path,
-          image_name: item.file.name,
-          probability: item.result.probability,
-          prediction: item.result.prediction,
-          pathology: "cardiomegaly",
-        });
-        if (insErr) throw insErr;
-        saved += 1;
-      }
-      toast.success(`Saved ${saved} result${saved === 1 ? "" : "s"} to your history.`);
-    } catch (err) {
-      toast.error((err as Error).message ?? "Failed to save results.");
-    } finally {
-      setSaving(false);
-    }
-  };
+  const ctaTo = user ? "/app" : "/auth";
+  const ctaLabel = user ? "Open scanner" : "Sign in to start";
 
   return (
     <div className="min-h-screen" style={{ background: "var(--gradient-surface)" }}>
       <AppHeader />
 
-      <main className="mx-auto max-w-6xl px-4 pb-20 pt-10 sm:px-6">
-        {/* Hero */}
-        <section className="mx-auto max-w-3xl text-center">
-          <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground">
-            <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
-            AI-assisted screening · Research preview
-          </div>
-          <h1 className="text-balance text-4xl font-bold tracking-tight sm:text-5xl">
-            Cardiomegaly detection from{" "}
-            <span
-              className="bg-clip-text text-transparent"
-              style={{ backgroundImage: "var(--gradient-primary)" }}
-            >
-              chest X-rays
-            </span>
-          </h1>
-          <p className="mx-auto mt-4 max-w-2xl text-pretty text-base text-muted-foreground sm:text-lg">
-            Upload single or multiple X-ray images. Each image receives a probability score and a
-            binary verdict in seconds.
-          </p>
-        </section>
+      {/* HERO */}
+      <section className="relative overflow-hidden">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -top-32 right-[-10%] h-[480px] w-[480px] rounded-full opacity-30 blur-3xl"
+          style={{ background: "var(--gradient-primary)" }}
+        />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -bottom-40 left-[-10%] h-[420px] w-[420px] rounded-full opacity-20 blur-3xl"
+          style={{ background: "var(--gradient-primary)" }}
+        />
 
-        {/* Upload */}
-        <section className="mx-auto mt-10 max-w-3xl">
-          <ImageDropzone onFiles={handleFiles} />
-          {items.length > 0 && (
-            <div className="mt-3 flex items-center justify-end gap-2">
-              {!user && allDone && successful.length > 0 && (
-                <Link to="/auth" className="text-xs text-muted-foreground hover:text-foreground">
-                  Sign in to save results →
-                </Link>
-              )}
-              {user && allDone && successful.length > 0 && (
-                <Button size="sm" onClick={handleSave} disabled={saving}>
-                  <Save className="h-4 w-4" />
-                  {saving ? "Saving…" : `Save ${successful.length} to history`}
-                </Button>
-              )}
+        <div className="mx-auto grid max-w-6xl gap-12 px-4 pb-20 pt-16 sm:px-6 lg:grid-cols-2 lg:items-center lg:pt-24">
+          <div>
+            <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground">
+              <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+              AI-assisted screening · Research preview
             </div>
-          )}
-        </section>
+            <h1 className="text-balance text-4xl font-bold tracking-tight sm:text-5xl lg:text-6xl">
+              Detect{" "}
+              <span
+                className="bg-clip-text text-transparent"
+                style={{ backgroundImage: "var(--gradient-primary)" }}
+              >
+                cardiomegaly
+              </span>{" "}
+              from chest X-rays in seconds
+            </h1>
+            <p className="mt-5 max-w-xl text-pretty text-base text-muted-foreground sm:text-lg">
+              CardioScan analyzes chest radiographs with a deep neural network trained on
+              thousands of labelled images. Get a probability score and binary verdict the moment
+              you upload.
+            </p>
 
-        {/* Results */}
-        <div className="mx-auto mt-10 max-w-6xl">
-          <ResultsGallery
-            items={items}
-            onRemove={handleRemove}
-            onClear={handleClear}
-            onNotesChange={handleNotesChange}
+            <div className="mt-8 flex flex-wrap items-center gap-3">
+              <Button asChild size="lg">
+                <Link to={ctaTo}>
+                  {ctaLabel}
+                  <ArrowRight className="h-4 w-4" />
+                </Link>
+              </Button>
+              <Button asChild variant="outline" size="lg">
+                <a href="#how-it-works">How it works</a>
+              </Button>
+            </div>
+
+            <dl className="mt-10 grid max-w-md grid-cols-3 gap-6">
+              <Stat label="Inference" value="<2s" />
+              <Stat label="Threshold" value="0.5" />
+              <Stat label="Per-user data" value="Private" />
+            </dl>
+          </div>
+
+          <div className="relative">
+            <div
+              className="rounded-3xl border border-border bg-card p-6"
+              style={{ boxShadow: "var(--shadow-elegant)" }}
+            >
+              <NeuralNetworkAnim />
+              <div className="mt-4 flex items-center justify-between text-xs text-muted-foreground">
+                <span className="inline-flex items-center gap-1.5">
+                  <Activity className="h-3.5 w-3.5 text-primary" />
+                  Live model visualization
+                </span>
+                <span>4 layers · 17 neurons</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* FEATURES */}
+      <section className="mx-auto max-w-6xl px-4 pb-20 sm:px-6">
+        <div className="mx-auto mb-10 max-w-2xl text-center">
+          <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">
+            Built for clinicians and researchers
+          </h2>
+          <p className="mt-3 text-muted-foreground">
+            A focused workflow: upload, classify, review, and save — nothing in the way.
+          </p>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <FeatureTile
+            icon={<Zap className="h-5 w-5" />}
+            title="Instant inference"
+            body="Probability score per image, returned in under two seconds."
+          />
+          <FeatureTile
+            icon={<Brain className="h-5 w-5" />}
+            title="Binary verdict"
+            body="Threshold of 0.5 maps probability to a clear 0/1 prediction."
+          />
+          <FeatureTile
+            icon={<ShieldCheck className="h-5 w-5" />}
+            title="Private by default"
+            body="Saved scans are protected by per-user access policies."
           />
         </div>
+      </section>
 
-        {/* Feature strip */}
-        {items.length === 0 && (
-          <section className="mx-auto mt-16 grid max-w-4xl gap-4 sm:grid-cols-3">
-            <FeatureTile
-              icon={<Zap className="h-5 w-5" />}
-              title="Instant inference"
-              body="Probability score per image, returned in under two seconds."
+      {/* HOW IT WORKS */}
+      <section
+        id="how-it-works"
+        className="border-y border-border/60"
+        style={{ background: "color-mix(in oklab, var(--primary) 4%, var(--background))" }}
+      >
+        <div className="mx-auto max-w-6xl px-4 py-20 sm:px-6">
+          <div className="mx-auto mb-12 max-w-2xl text-center">
+            <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">How it works</h2>
+            <p className="mt-3 text-muted-foreground">
+              Three steps from upload to verdict.
+            </p>
+          </div>
+          <ol className="grid gap-6 sm:grid-cols-3">
+            <Step
+              n={1}
+              icon={<Upload className="h-5 w-5" />}
+              title="Upload X-rays"
+              body="Drag & drop one or many chest X-rays. JPG or PNG, any size."
             />
-            <FeatureTile
-              icon={<Brain className="h-5 w-5" />}
-              title="Binary verdict"
-              body="Threshold of 0.5 maps probability to a 0/1 prediction."
+            <Step
+              n={2}
+              icon={<LineChart className="h-5 w-5" />}
+              title="AI inference"
+              body="Our neural network returns a calibrated probability score for each image."
             />
-            <FeatureTile
-              icon={<ShieldCheck className="h-5 w-5" />}
-              title="Private by default"
-              body="Saved scans are protected by per-user access policies."
+            <Step
+              n={3}
+              icon={<Stethoscope className="h-5 w-5" />}
+              title="Review & save"
+              body="Add notes, save to your private history, and revisit any time."
             />
-          </section>
-        )}
+          </ol>
+        </div>
+      </section>
 
-        <p className="mx-auto mt-16 max-w-2xl text-center text-xs text-muted-foreground">
-          For research and educational use only. Not a substitute for professional medical
-          diagnosis.
-        </p>
-      </main>
+      {/* CTA */}
+      <section className="mx-auto max-w-6xl px-4 py-20 sm:px-6">
+        <div
+          className="overflow-hidden rounded-3xl border border-border p-10 text-center sm:p-14"
+          style={{
+            background: "var(--gradient-primary)",
+            boxShadow: "var(--shadow-elegant)",
+          }}
+        >
+          <h2 className="text-balance text-3xl font-bold tracking-tight text-primary-foreground sm:text-4xl">
+            Ready to analyze your first scan?
+          </h2>
+          <p className="mx-auto mt-3 max-w-xl text-pretty text-primary-foreground/85">
+            {user
+              ? "Jump into the scanner and upload an X-ray."
+              : "Create a free account to start uploading X-rays and saving results."}
+          </p>
+          <div className="mt-8 flex justify-center">
+            <Button
+              asChild
+              size="lg"
+              variant="secondary"
+              className="bg-card text-foreground hover:bg-card/90"
+            >
+              <Link to={ctaTo}>
+                {ctaLabel}
+                <ArrowRight className="h-4 w-4" />
+              </Link>
+            </Button>
+          </div>
+        </div>
+      </section>
+
+      <footer className="mx-auto max-w-6xl px-4 pb-10 text-center text-xs text-muted-foreground sm:px-6">
+        For research and educational use only. Not a substitute for professional medical
+        diagnosis.
+      </footer>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-xs uppercase tracking-widest text-muted-foreground">{label}</dt>
+      <dd className="mt-1 text-xl font-semibold tracking-tight">{value}</dd>
     </div>
   );
 }
@@ -208,14 +240,42 @@ function FeatureTile({
 }) {
   return (
     <div
-      className="rounded-xl border border-border bg-card p-5"
+      className="rounded-2xl border border-border bg-card p-6 transition-transform hover:-translate-y-0.5"
       style={{ boxShadow: "var(--shadow-card)" }}
     >
-      <div className="mb-3 inline-flex h-9 w-9 items-center justify-center rounded-lg bg-accent text-primary">
+      <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-lg bg-accent text-primary">
         {icon}
       </div>
-      <h3 className="text-sm font-semibold">{title}</h3>
-      <p className="mt-1 text-sm text-muted-foreground">{body}</p>
+      <h3 className="text-base font-semibold">{title}</h3>
+      <p className="mt-1.5 text-sm text-muted-foreground">{body}</p>
     </div>
+  );
+}
+
+function Step({
+  n,
+  icon,
+  title,
+  body,
+}: {
+  n: number;
+  icon: React.ReactNode;
+  title: string;
+  body: string;
+}) {
+  return (
+    <li
+      className="relative rounded-2xl border border-border bg-card p-6"
+      style={{ boxShadow: "var(--shadow-card)" }}
+    >
+      <span className="absolute -top-3 left-6 inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+        {n}
+      </span>
+      <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-lg bg-accent text-primary">
+        {icon}
+      </div>
+      <h3 className="text-base font-semibold">{title}</h3>
+      <p className="mt-1.5 text-sm text-muted-foreground">{body}</p>
+    </li>
   );
 }
