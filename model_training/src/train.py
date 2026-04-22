@@ -19,6 +19,7 @@ from src.model import (
     build_model,
     cardio_logit,
     freeze_backbone,
+    partial_unfreeze,
     trainable_params,
     unfreeze_all,
 )
@@ -83,12 +84,24 @@ def run_one_epoch(
     y_prob  = 1.0 / (1.0 + np.exp(-y_logit))
     auc     = roc_auc_score(y_true, y_prob) if len(np.unique(y_true)) > 1 else float("nan")
 
+    # Extra metrics at default threshold=0.5 for live training monitoring
+    y_pred = (y_prob >= 0.5).astype(int)
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
+    sens      = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    spec      = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+    acc       = (tp + tn) / len(y_true) if len(y_true) > 0 else 0.0
+    composite = 0.5 * auc + 0.25 * sens + 0.25 * spec if not np.isnan(auc) else float("nan")
+
     return {
-        "loss":   float(np.mean(losses)) if losses else float("nan"),
-        "auc":    float(auc),
-        "y_true": y_true,
-        "y_prob": y_prob,
-        "names":  names_all,
+        "loss":      float(np.mean(losses)) if losses else float("nan"),
+        "auc":       float(auc),
+        "acc":       float(acc),
+        "sens":      float(sens),
+        "spec":      float(spec),
+        "composite": float(composite),
+        "y_true":    y_true,
+        "y_prob":    y_prob,
+        "names":     names_all,
     }
 
 
@@ -110,8 +123,9 @@ def train_one_seed(
     output_dir = output_dir or cfg.output_dir
     os.makedirs(output_dir, exist_ok=True)
 
+    mode = "ENSEMBLE" if getattr(cfg, "use_ensemble", True) else "SINGLE MODEL"
     print("\n" + "=" * 80)
-    print(f" Training with seed = {seed}")
+    print(f" Mode: {mode}  |  Backbone: {cfg.backbone}  |  Seed: {seed}")
     print("=" * 80)
     set_seed(seed)
 
@@ -133,16 +147,21 @@ def train_one_seed(
         history.append({
             "seed": seed, "stage": "frozen", "epoch": ep,
             "train_loss": t["loss"], "train_auc": t["auc"],
+            "train_acc":  t["acc"], "train_composite": t["composite"],
             "val_loss":   v["loss"], "val_auc":   v["auc"],
+            "val_acc":    v["acc"], "val_sens":   v["sens"],
+            "val_spec":   v["spec"], "val_composite": v["composite"],
             "lr": opt_frozen.param_groups[0]["lr"],
         })
         print(
             f"  [frozen] {ep}/{cfg.frozen_epochs}  "
-            f"train_loss={t['loss']:.4f}  val_auc={v['auc']:.4f}"
+            f"loss={t['loss']:.4f}  train_acc={t['acc']*100:.1f}%  |  "
+            f"val_auc={v['auc']:.4f}  val_acc={v['acc']*100:.1f}%  "
+            f"sens={v['sens']:.3f}  spec={v['spec']:.3f}  comp={v['composite']:.4f}"
         )
 
-    # ── Stage 2: full fine-tune with differential LRs + cosine schedule ───
-    unfreeze_all(model)
+    # ── Stage 2: partial or full fine-tune with differential LRs + cosine schedule ───
+    partial_unfreeze(model, getattr(cfg, "frozen_blocks", 0))
     opt_ft = optim.AdamW(
         [
             {"params": model.features.parameters(),   "lr": cfg.backbone_lr},
@@ -164,13 +183,18 @@ def train_one_seed(
         history.append({
             "seed": seed, "stage": "finetune", "epoch": ep,
             "train_loss": t["loss"], "train_auc": t["auc"],
+            "train_acc":  t["acc"], "train_composite": t["composite"],
             "val_loss":   v["loss"], "val_auc":   v["auc"],
+            "val_acc":    v["acc"], "val_sens":   v["sens"],
+            "val_spec":   v["spec"], "val_composite": v["composite"],
             "lr": opt_ft.param_groups[0]["lr"],
         })
         print(
             f"  [ft]     {ep}/{cfg.finetune_epochs}  "
-            f"train_loss={t['loss']:.4f}  val_auc={v['auc']:.4f}  "
-            f"lr_bb={opt_ft.param_groups[0]['lr']:.2e}"
+            f"loss={t['loss']:.4f}  train_acc={t['acc']*100:.1f}%  |  "
+            f"val_auc={v['auc']:.4f}  val_acc={v['acc']*100:.1f}%  "
+            f"sens={v['sens']:.3f}  spec={v['spec']:.3f}  comp={v['composite']:.4f}  "
+            f"lr={opt_ft.param_groups[0]['lr']:.2e}"
         )
 
         if v["auc"] > best_auc:
@@ -251,8 +275,20 @@ def train(
     """
     cfg = config or CFG
     if cfg.use_ensemble:
+        print("\n" + "█" * 80)
+        print(f"  TRAINING MODE : ENSEMBLE  ({len(cfg.seeds)} seeds: {cfg.seeds})")
+        print(f"  BACKBONE      : {cfg.backbone}")
+        print(f"  FROZEN BLOCKS : {getattr(cfg, 'frozen_blocks', 0)}  |  "
+              f"Stage-1 epochs: {cfg.frozen_epochs}  |  Stage-2 epochs: {cfg.finetune_epochs}")
+        print("█" * 80)
         return train_ensemble(train_loader, val_loader, output_dir=output_dir, config=cfg)
 
+    print("\n" + "█" * 80)
+    print(f"  TRAINING MODE : SINGLE MODEL  (seed={cfg.seed})")
+    print(f"  BACKBONE      : {cfg.backbone}")
+    print(f"  FROZEN BLOCKS : {getattr(cfg, 'frozen_blocks', 0)}  |  "
+          f"Stage-1 epochs: {cfg.frozen_epochs}  |  Stage-2 epochs: {cfg.finetune_epochs}")
+    print("█" * 80)
     m, auc, ckpt, hist = train_one_seed(
         cfg.seed, train_loader, val_loader, output_dir=output_dir, config=cfg,
     )

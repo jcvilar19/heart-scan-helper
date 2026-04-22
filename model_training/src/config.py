@@ -30,8 +30,18 @@ class Config:
 
     # ── Training schedule (two-stage) ────────────────────────────────────
     frozen_epochs:   int = 3       # stage 1: head-only warmup
-    finetune_epochs: int = 22      # stage 2: full unfreeze with cosine LR
-    early_stop_patience: int = 6   # early stop on val AUC during stage 2
+    finetune_epochs: int = 10      # stage 2: fine-tune with cosine LR
+    early_stop_patience: int = 4   # early stop on val AUC during stage 2
+
+    # How many feature blocks to keep frozen during stage 2.
+    # DenseNet-121 has 4 dense blocks:
+    #   0 → unfreeze everything             (most aggressive fine-tuning)
+    #   1 → keep denseblock1 frozen
+    #   2 → keep denseblock1–2 frozen       (recommended for small datasets)
+    #   3 → keep denseblock1–3 frozen
+    #   4 → keep all feature blocks frozen  (only classifier trains in stage 2)
+    # For MobileNet / EfficientNet the number refers to sub-modules of model.features.
+    frozen_blocks: int = 2
 
     # ── Optimiser ────────────────────────────────────────────────────────
     head_lr:      float = 3e-4     # classifier LR (both stages)
@@ -45,12 +55,12 @@ class Config:
     # mobilenet_v3_large — torchvision MobileNetV3-Large, pretrained on ImageNet (faster, lighter)
     # efficientnet_b0   — torchvision EfficientNet-B0,  pretrained on ImageNet (good accuracy/size trade-off)
     # efficientnet_b3   — torchvision EfficientNet-B3,  pretrained on ImageNet (higher accuracy, more params)
-    backbone: str = "densenet121"
+    backbone: str = "mobilenet_v3_large"
 
     # ── Ensemble ─────────────────────────────────────────────────────────
     # True:  train one model per entry in `seeds` and average predictions
     # False: train a single model using only `seed` (faster experimentation)
-    use_ensemble: bool = True
+    use_ensemble: bool = False
 
     # ── Multi-seed ensemble ──────────────────────────────────────────────
     seeds: List[int] = field(default_factory=lambda: [42, 7, 2024])
