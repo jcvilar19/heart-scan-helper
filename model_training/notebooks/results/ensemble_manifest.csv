@@ -1,0 +1,4 @@
+seed,best_val_auc,checkpoint
+8,0.9496841803043353,results/model_seed8.pth
+7,0.9425782371518806,results/model_seed7.pth
+2024,0.94717197817973,results/model_seed2024.pth
