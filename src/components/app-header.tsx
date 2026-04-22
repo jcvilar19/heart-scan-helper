@@ -35,12 +35,20 @@ export function AppHeader() {
 
         <nav className="flex items-center gap-1 sm:gap-2">
           {user && (
-            <Button asChild variant="ghost" size="sm">
-              <Link to="/history">
-                <History className="h-4 w-4" />
-                <span className="hidden sm:inline">History</span>
-              </Link>
-            </Button>
+            <>
+              <Button asChild variant="ghost" size="sm">
+                <Link to="/app">
+                  <Activity className="h-4 w-4" />
+                  <span className="hidden sm:inline">Scanner</span>
+                </Link>
+              </Button>
+              <Button asChild variant="ghost" size="sm">
+                <Link to="/history">
+                  <History className="h-4 w-4" />
+                  <span className="hidden sm:inline">History</span>
+                </Link>
+              </Button>
+            </>
           )}
 
           <Button
