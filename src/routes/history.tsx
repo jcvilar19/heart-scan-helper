@@ -263,8 +263,24 @@ function HistoryPage() {
             ) : aiError ? (
               <p className="text-sm text-destructive">{aiError}</p>
             ) : aiSummary ? (
-              <div className="prose prose-sm max-w-none dark:prose-invert prose-headings:mb-2 prose-headings:mt-4 prose-h2:text-base prose-p:text-sm prose-li:text-sm">
-                <ReactMarkdown>{aiSummary}</ReactMarkdown>
+              <div className="space-y-2 text-sm leading-relaxed">
+                <ReactMarkdown
+                  components={{
+                    h1: (props) => <h3 className="mt-4 text-base font-semibold" {...props} />,
+                    h2: (props) => <h3 className="mt-4 text-base font-semibold" {...props} />,
+                    h3: (props) => <h4 className="mt-3 text-sm font-semibold" {...props} />,
+                    p: (props) => <p className="text-sm text-foreground/90" {...props} />,
+                    ul: (props) => <ul className="list-disc space-y-1 pl-5 text-sm" {...props} />,
+                    ol: (props) => <ol className="list-decimal space-y-1 pl-5 text-sm" {...props} />,
+                    li: (props) => <li className="text-foreground/90" {...props} />,
+                    strong: (props) => <strong className="font-semibold text-foreground" {...props} />,
+                    code: (props) => (
+                      <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs" {...props} />
+                    ),
+                  }}
+                >
+                  {aiSummary}
+                </ReactMarkdown>
               </div>
             ) : null}
           </section>
