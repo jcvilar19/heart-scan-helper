@@ -4,7 +4,7 @@ import {
   Brain,
   ShieldCheck,
   Zap,
-  Activity,
+  
   Upload,
   LineChart,
   Stethoscope,
