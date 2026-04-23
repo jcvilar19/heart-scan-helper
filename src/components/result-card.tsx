@@ -374,7 +374,7 @@ function ReportDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onGenerate: (info: ReportPatient) => Promise<void> | void;
+  onGenerate: (info: ReportPatient, includeAi: boolean) => Promise<void> | void;
   submitting: boolean;
   canGenerate: boolean;
   defaultPatientName?: string;
@@ -388,6 +388,7 @@ function ReportDialog({
   const [doctorName, setDoctorName] = useState(fallbackDoctor);
   const [patientName, setPatientName] = useState(defaultPatientName ?? "");
   const [patientId, setPatientId] = useState(defaultPatientId ?? "");
+  const [includeAi, setIncludeAi] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -395,6 +396,7 @@ function ReportDialog({
       setDoctorName(fallbackDoctor);
       setPatientName(defaultPatientName ?? "");
       setPatientId(defaultPatientId ?? "");
+      setIncludeAi(true);
       setError(null);
     }
   }, [open, fallbackDoctor, defaultPatientName, defaultPatientId]);
