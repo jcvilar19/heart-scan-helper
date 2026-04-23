@@ -346,12 +346,12 @@ export async function generateReport({ patient, scan, aiSummary }: ReportOptions
   y += 9;
 
   // Patient + doctor info cards
-  sectionTitle(doc, "Patient & clinician", margin, y);
+  sectionTitle(doc, "Patient & doctor", margin, y);
   y += 5;
   const cardW = (pageWidth - margin * 2 - 6) / 3;
   infoCard(doc, margin, y, cardW, 16, "Patient name", patient.patientName);
   infoCard(doc, margin + cardW + 3, y, cardW, 16, "Patient ID", patient.patientId);
-  infoCard(doc, margin + (cardW + 3) * 2, y, cardW, 16, "Reporting clinician", patient.doctorName || "—");
+  infoCard(doc, margin + (cardW + 3) * 2, y, cardW, 16, "Reporting doctor", patient.doctorName || "—");
   y += 22;
 
   // Diagnostic
