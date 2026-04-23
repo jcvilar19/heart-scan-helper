@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { Activity, History, LogIn, LogOut, Moon, Sun, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -9,6 +10,11 @@ export function AppHeader() {
   const { user } = useAuth();
   const { theme, toggle } = useTheme();
   const navigate = useNavigate();
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
@@ -63,7 +69,7 @@ export function AppHeader() {
             onClick={toggle}
             aria-label="Toggle theme"
           >
-            {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            {mounted && theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
 
           {user ? (
