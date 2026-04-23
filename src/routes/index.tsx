@@ -1,4 +1,5 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useEffect } from "react";
 import {
   ArrowRight,
   Brain,
@@ -34,9 +35,19 @@ export const Route = createFileRoute("/")({
 });
 
 function LandingPage() {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!loading && user) {
+      navigate({ to: "/app", replace: true });
+    }
+  }, [user, loading, navigate]);
+
   const ctaTo = user ? "/app" : "/auth";
   const ctaLabel = user ? "Open scanner" : "Sign in to start";
+
+  if (!loading && user) return null;
 
   return (
     <div className="min-h-screen" style={{ background: "var(--gradient-surface)" }}>
