@@ -17,25 +17,6 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
 
-const markdownComponents = {
-  h1: (props: ComponentProps<"h3">) => <h3 className="mt-4 text-base font-semibold" {...props} />,
-  h2: (props: ComponentProps<"h3">) => <h3 className="mt-4 text-base font-semibold" {...props} />,
-  h3: (props: ComponentProps<"h4">) => <h4 className="mt-3 text-sm font-semibold" {...props} />,
-  p: (props: ComponentProps<"p">) => <p className="text-sm text-foreground/90" {...props} />,
-  ul: (props: ComponentProps<"ul">) => (
-    <ul className="list-disc space-y-1 pl-5 text-sm" {...props} />
-  ),
-  ol: (props: ComponentProps<"ol">) => (
-    <ol className="list-decimal space-y-1 pl-5 text-sm" {...props} />
-  ),
-  li: (props: ComponentProps<"li">) => <li className="text-foreground/90" {...props} />,
-  strong: (props: ComponentProps<"strong">) => (
-    <strong className="font-semibold text-foreground" {...props} />
-  ),
-  code: (props: ComponentProps<"code">) => (
-    <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs" {...props} />
-  ),
-};
 
 export const Route = createFileRoute("/history")({
   component: HistoryPage,
