@@ -13,7 +13,7 @@ export const Route = createFileRoute("/profile")({
   component: ProfilePage,
   head: () => ({
     meta: [
-      { title: "Profile — CardioScan" },
+      { title: "Profile — Coraçai" },
       {
         name: "description",
         content: "Manage the doctor name shown on patient reports.",
