@@ -70,7 +70,8 @@ function LandingPage() {
                 Cardiomegaly
               </span>{" "}
               <br className="hidden sm:inline" />
-              from X-Rays in seconds
+              from X-Rays <br className="hidden sm:inline" />
+              in seconds.
             </h1>
             <p className="mt-5 max-w-xl text-pretty text-base text-muted-foreground sm:text-lg">
               Coraçai analyzes chest radiography with a ML model trained on thousands of
