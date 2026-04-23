@@ -29,18 +29,18 @@ export const Route = createRootRoute({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "CardioScan — AI Cardiomegaly Detection from Chest X-rays" },
+      { title: "Coraçai — AI Cardiomegaly Detection from Chest X-rays" },
       {
         name: "description",
         content:
           "Upload chest X-ray images and get an AI-assisted cardiomegaly probability score in seconds. Designed for clinicians and researchers.",
       },
-      { name: "author", content: "CardioScan" },
-      { property: "og:title", content: "CardioScan — AI Cardiomegaly Detection from Chest X-rays" },
+      { name: "author", content: "Coraçai" },
+      { property: "og:title", content: "Coraçai — AI Cardiomegaly Detection from Chest X-rays" },
       { property: "og:description", content: "Upload and classify medical images like X-rays with an intuitive UI." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
-      { name: "twitter:title", content: "CardioScan — AI Cardiomegaly Detection from Chest X-rays" },
+      { name: "twitter:title", content: "Coraçai — AI Cardiomegaly Detection from Chest X-rays" },
       { name: "description", content: "Upload and classify medical images like X-rays with an intuitive UI." },
       { name: "twitter:description", content: "Upload and classify medical images like X-rays with an intuitive UI." },
       { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/d1564526-1b6b-4a50-8de2-78ab6de68c22/id-preview-1b66345b--43079148-fa84-4473-9c38-00159e4cfc53.lovable.app-1776862541619.png" },

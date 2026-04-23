@@ -18,13 +18,13 @@ export const Route = createFileRoute("/")({
   component: LandingPage,
   head: () => ({
     meta: [
-      { title: "CardioScan — AI Cardiomegaly Detection from Chest X-rays" },
+      { title: "Coraçai — AI Cardiomegaly Detection from Chest X-rays" },
       {
         name: "description",
         content:
           "AI-assisted cardiomegaly screening from chest X-rays. Upload images and get a probability score in seconds.",
       },
-      { property: "og:title", content: "CardioScan — AI Cardiomegaly Detection" },
+      { property: "og:title", content: "Coraçai — AI Cardiomegaly Detection" },
       {
         property: "og:description",
         content: "AI-assisted cardiomegaly screening from chest X-rays.",
@@ -72,7 +72,7 @@ function LandingPage() {
               from chest X-rays in seconds
             </h1>
             <p className="mt-5 max-w-xl text-pretty text-base text-muted-foreground sm:text-lg">
-              CardioScan analyzes chest radiographs with a deep neural network trained on
+              Coraçai analyzes chest radiographs with a deep neural network trained on
               thousands of labelled images. Get a probability score and binary verdict the moment
               you upload.
             </p>

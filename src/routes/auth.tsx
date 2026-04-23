@@ -13,7 +13,7 @@ export const Route = createFileRoute("/auth")({
   component: AuthPage,
   head: () => ({
     meta: [
-      { title: "Sign in — CardioScan" },
+      { title: "Sign in — Coraçai" },
       { name: "description", content: "Sign in to save and review your cardiomegaly classification history." },
     ],
   }),
@@ -109,7 +109,7 @@ function AuthPage() {
           >
             <Activity className="h-5 w-5" strokeWidth={2.5} />
           </span>
-          <span className="text-lg font-semibold tracking-tight">CardioScan</span>
+          <span className="text-lg font-semibold tracking-tight">Coraçai</span>
         </Link>
 
         <div
