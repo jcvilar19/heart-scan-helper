@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ScanAiInsight } from "@/components/scan-ai-insight";
 import { useAuth } from "@/hooks/use-auth";
 
 export type AnalysisStatus = "pending" | "validating" | "analyzing" | "done" | "error";
