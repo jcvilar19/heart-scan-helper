@@ -194,10 +194,10 @@ function ResultState({
   const [downloading, setDownloading] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
 
-  const onGenerate = async (info: ReportPatient) => {
+  const onGenerate = async (info: ReportPatient, includeAi: boolean) => {
     setDownloading(true);
     try {
-      await downloadPdf(item, info);
+      await downloadPdf(item, info, includeAi);
       setReportOpen(false);
     } finally {
       setDownloading(false);
