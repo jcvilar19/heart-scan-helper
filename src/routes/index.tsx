@@ -72,7 +72,7 @@ function LandingPage() {
               from chest X-rays in seconds
             </h1>
             <p className="mt-5 max-w-xl text-pretty text-base text-muted-foreground sm:text-lg">
-              CardioScan analyzes chest radiographs with a deep neural network trained on
+              Coraçai analyzes chest radiographs with a deep neural network trained on
               thousands of labelled images. Get a probability score and binary verdict the moment
               you upload.
             </p>
