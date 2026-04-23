@@ -106,7 +106,9 @@ def _load_bbox_cache(cache_path: str) -> Dict[str, Any]:
 def _save_bbox_cache(cache_path: str) -> None:
     if _BBOX_CACHE is None:
         return
-    os.makedirs(os.path.dirname(cache_path) or ".", exist_ok=True)
+    d = os.path.dirname(cache_path)
+    if d:
+        os.makedirs(d, exist_ok=True)
     with open(cache_path, "w", encoding="utf-8") as f:
         json.dump(_BBOX_CACHE, f)
 
