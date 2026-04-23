@@ -274,6 +274,7 @@ function HistoryPage() {
                         style={{ color: positive ? "var(--warning)" : "var(--success)" }}
                       >
                         {r.probability.toFixed(3)}
+                      </span>
                     </div>
                     <ScanAiInsight
                       scan={{
