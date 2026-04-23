@@ -274,8 +274,19 @@ function HistoryPage() {
                         style={{ color: positive ? "var(--warning)" : "var(--success)" }}
                       >
                         {r.probability.toFixed(3)}
-                      </span>
                     </div>
+                    <ScanAiInsight
+                      scan={{
+                        patient_name: r.patient_name,
+                        patient_id: r.patient_id,
+                        image_name: r.image_name,
+                        probability: r.probability,
+                        prediction: r.prediction,
+                        pathology: r.pathology,
+                        notes: r.notes,
+                        created_at: r.created_at,
+                      }}
+                    />
                   </div>
                 </article>
               );
