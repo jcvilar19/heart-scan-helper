@@ -38,6 +38,18 @@ function HistoryPage() {
   const navigate = useNavigate();
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
+
+  const filteredRows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter((r) => {
+      const name = r.patient_name?.toLowerCase() ?? "";
+      const pid = r.patient_id?.toLowerCase() ?? "";
+      const file = r.image_name?.toLowerCase() ?? "";
+      return name.includes(q) || pid.includes(q) || file.includes(q);
+    });
+  }, [rows, query]);
 
   useEffect(() => {
     if (!authLoading && !user) navigate({ to: "/auth" });
