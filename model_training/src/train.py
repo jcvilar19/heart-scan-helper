@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from sklearn.metrics import confusion_matrix, roc_auc_score
@@ -85,45 +84,6 @@ def infer_bce_pos_weight_tensor(
     w = float(scale) * (n_neg / n_pos)
     w = min(w, 100.0)
     return torch.tensor([w], device=device, dtype=torch.float32)
-
-
-def infer_focal_pos_weight_tensor(
-    train_loader: DataLoader,
-    device: str,
-) -> Optional[torch.Tensor]:
-    """``pos_weight = n_neg / n_pos`` on the training split (Model 22 focal loss)."""
-    ds = train_loader.dataset
-    if hasattr(ds, "df"):
-        y = ds.df["label"].to_numpy(dtype=np.float64)
-    elif hasattr(ds, "labels"):
-        y = ds.labels.detach().cpu().numpy()
-    else:
-        return None
-    n_pos = int(np.sum(y >= 0.5))
-    n_neg = int(len(y) - n_pos)
-    if n_pos <= 0 or n_neg < 0:
-        return None
-    w = float(n_neg) / float(n_pos)
-    return torch.tensor([w], device=device, dtype=torch.float32)
-
-
-class FocalLoss(nn.Module):
-    """Focal loss on logits (Model 22: γ=2, optional ``pos_weight``)."""
-
-    def __init__(self, gamma: float = 2.0, pos_weight: Optional[torch.Tensor] = None) -> None:
-        super().__init__()
-        self.gamma = float(gamma)
-        self._pw = pos_weight
-
-    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        pw = self._pw
-        if pw is not None and pw.device != logits.device:
-            pw = pw.to(logits.device)
-        bce = F.binary_cross_entropy_with_logits(
-            logits, targets, pos_weight=pw, reduction="none"
-        )
-        pt = torch.exp(-bce)
-        return ((1.0 - pt) ** self.gamma * bce).mean()
 
 
 class SoftCompositeLoss(nn.Module):
@@ -454,21 +414,10 @@ def train_one_seed(
 
     _pw_scale = getattr(cfg, "bce_pos_weight_scale", 0.0)
     _pos_w    = infer_bce_pos_weight_tensor(train_loader, _pw_scale, cfg.device)
-    if _pos_w is not None and not getattr(cfg, "use_focal_loss", False):
+    if _pos_w is not None:
         print(f"  BCE pos_weight: {_pos_w.item():.4f}  (scale={_pw_scale} × n_neg/n_pos on train split)")
 
-    if getattr(cfg, "use_focal_loss", False):
-        if cfg.use_composite_loss:
-            print("  Note: use_focal_loss=True → ignoring use_composite_loss for this run.")
-        f_pw = infer_focal_pos_weight_tensor(train_loader, cfg.device)
-        if f_pw is not None:
-            print(f"  Focal pos_weight (n_neg/n_pos): {f_pw.item():.4f}")
-        criterion = FocalLoss(
-            gamma=float(getattr(cfg, "focal_gamma", 2.0)),
-            pos_weight=f_pw,
-        )
-        print(f"  Loss    : FocalLoss  (γ={getattr(cfg, 'focal_gamma', 2.0)})")
-    elif cfg.use_composite_loss:
+    if cfg.use_composite_loss:
         criterion = SoftCompositeLoss(
             alpha=cfg.composite_loss_alpha,
             auc_gamma=cfg.composite_loss_gamma,
@@ -744,11 +693,8 @@ def tta_predict(
     Predictions are averaged in **logit space** across all TTA passes.
     """
     cfg = config or CFG
-    tta_transforms = tta_transforms or make_tta_transforms(
-        cfg.img_size,
-        style=getattr(cfg, "tta_style", "default"),
-    )
-    tta_transforms = tta_transforms[: int(cfg.tta_passes)]
+    tta_transforms = tta_transforms or make_tta_transforms(cfg.img_size)
+    tta_transforms = tta_transforms[:cfg.tta_passes]
 
     all_logits: list[np.ndarray] = []
     names_ref, labels_ref = None, None
@@ -757,7 +703,7 @@ def tta_predict(
     amp_ctx = torch.cuda.amp.autocast(enabled=(cfg.device == "cuda"))
 
     for tf in tta_transforms:
-        ds = TTADataset(df, tf, image_dir, backbone=cfg.backbone)
+        ds = TTADataset(df, tf, image_dir)
         loader = DataLoader(
             ds, batch_size=cfg.batch_size, num_workers=cfg.num_workers,
             pin_memory=pin, shuffle=False,

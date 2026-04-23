@@ -24,18 +24,6 @@ class Config:
     batch_size:  int = 32
     num_workers: int = 4
 
-    # ── Model 22–style RAD-DINO preprocessing (see ``src/model22_preprocess.py``) ─
-    # ``\"model22\"`` + backbone ``rad-dino`` → CLAHE (+ optional thorax crop cache),
-    # albumentations on train, and ``transform_style`` / ``tta_style`` below.
-    preprocessing_profile: str = "default"   # "default" | "model22"
-    crop_to_thorax: bool = False               # requires pre-built bbox JSON cache
-    thorax_pad: float = 0.05                   # relative pad around PSPNet bbox (Model 22)
-    thorax_bbox_cache_path: str = ""           # empty → ``{output_dir}/lung_bboxes.json``
-    # Train-time torchvision aug: "model22" applies only when backbone == rad-dino
-    transform_style: str = "default"           # "default" | "model22"
-    # TTA: "model22" = 7 passes, no hflip (matches Model22_improved.ipynb)
-    tta_style: str = "default"                 # "default" | "model22"
-
     # ── Train / val / test split ─────────────────────────────────────────
     val_size:  float = 0.15
     test_size: float = 0.15
@@ -95,9 +83,6 @@ class Config:
     seeds: List[int] = field(default_factory=lambda: [42, 7, 2024])
 
     # ── Loss function ─────────────────────────────────────────────────────
-    # Focal loss (Model 22): if True, overrides composite and plain BCE.
-    use_focal_loss: bool = False
-    focal_gamma:    float = 2.0
     # False: standard BCE  |  True: 0.5*BCE + 0.5*(1 - soft_composite)
     use_composite_loss:    bool  = False
     # Blend weight α: α·BCE + (1-α)·(1-soft_composite).  0 = pure composite, 1 = pure BCE.
@@ -110,8 +95,7 @@ class Config:
     composite_min_class_per_batch: int = 2
 
     # ── Inference ────────────────────────────────────────────────────────
-    # ``tta_style=\"model22\"`` exposes 7 transforms; cap with ``tta_passes`` (≤7).
-    tta_passes:  int = 6
+    tta_passes:  int = 6           # number of deterministic TTA transforms (max 6)
     n_bootstrap: int = 1000        # bootstrap iterations for threshold stabilisation
 
     # ── Device (auto-detected) ───────────────────────────────────────────

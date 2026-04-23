@@ -1,4 +1,5 @@
-seed,best_val_auc,checkpoint
-8,0.9496841803043353,results/model_seed8.pth
-7,0.9425782371518806,results/model_seed7.pth
-2024,0.94717197817973,results/model_seed2024.pth
+seed,checkpoint_metric,best_val_score,checkpoint
+8,composite,0.9151234567901235,results/model_seed8.pth
+7,composite,0.9128804191788686,results/model_seed7.pth
+2024,composite,0.9123241458512776,results/model_seed2024.pth
+849,composite,0.904374820556991,results/model_seed849.pth

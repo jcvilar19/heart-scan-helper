@@ -13,8 +13,6 @@ import torchxrayvision as xrv
 class RadDinoWrapper(nn.Module):
     """microsoft/rad-dino — DINOv2 ViT-B/14 pretrained on ~1 M chest X-rays.
 
-    Architecture matches **Model 22** (CLS token → MLP head 768→256→1).
-
     Wraps the HuggingFace model to expose the same ``.features`` / ``.classifier``
     contract used by every other backbone, so freeze helpers and the two-stage
     optimiser work without modification.
