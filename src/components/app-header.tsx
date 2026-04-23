@@ -1,5 +1,5 @@
 import { Link, useNavigate } from "@tanstack/react-router";
-import { Activity, History, LogIn, LogOut, Moon, Sun } from "lucide-react";
+import { Activity, History, LogIn, LogOut, Moon, Sun, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/use-auth";
 import { useTheme } from "@/hooks/use-theme";
@@ -46,6 +46,12 @@ export function AppHeader() {
                 <Link to="/history">
                   <History className="h-4 w-4" />
                   <span className="hidden sm:inline">History</span>
+                </Link>
+              </Button>
+              <Button asChild variant="ghost" size="sm">
+                <Link to="/profile">
+                  <UserRound className="h-4 w-4" />
+                  <span className="hidden sm:inline">Profile</span>
                 </Link>
               </Button>
             </>
