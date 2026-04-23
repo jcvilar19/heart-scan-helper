@@ -66,10 +66,6 @@ function AppPage() {
       setHealth({ status: "mock" });
       return;
     }
-    if (!import.meta.env.VITE_PREDICT_API_URL) {
-      setHealth({ status: "down", message: "VITE_PREDICT_API_URL is not set in .env" });
-      return;
-    }
     const apiUrl = resolvePredictApiBaseUrl();
     setHealth({ status: "checking" });
     try {
