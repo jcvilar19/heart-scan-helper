@@ -10,6 +10,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
 
+
 export const Route = createFileRoute("/history")({
   component: HistoryPage,
   head: () => ({

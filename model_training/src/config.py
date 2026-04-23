@@ -24,6 +24,18 @@ class Config:
     batch_size:  int = 32
     num_workers: int = 4
 
+    # ── Model 22–style RAD-DINO preprocessing (see ``src/model22_preprocess.py``) ─
+    # ``\"model22\"`` + backbone ``rad-dino`` → CLAHE (+ optional thorax crop cache),
+    # albumentations on train, and ``transform_style`` / ``tta_style`` below.
+    preprocessing_profile: str = "default"   # "default" | "model22"
+    crop_to_thorax: bool = False               # requires pre-built bbox JSON cache
+    thorax_pad: float = 0.05                   # relative pad around PSPNet bbox (Model 22)
+    thorax_bbox_cache_path: str = ""           # empty → ``{output_dir}/lung_bboxes.json``
+    # Train-time torchvision aug: "model22" applies only when backbone == rad-dino
+    transform_style: str = "default"           # "default" | "model22"
+    # TTA: "model22" = 7 passes, no hflip (matches Model22_improved.ipynb)
+    tta_style: str = "default"                 # "default" | "model22"
+
     # ── Train / val / test split ─────────────────────────────────────────
     val_size:  float = 0.15
     test_size: float = 0.15
@@ -31,6 +43,9 @@ class Config:
     # ── Training schedule (two-stage) ────────────────────────────────────
     frozen_epochs:   int = 3       # stage 1: head-only warmup
     finetune_epochs: int = 22      # stage 2: full unfreeze with cosine LR
+    # Stage 2: linear LR warmup (all param groups) before cosine decay. 0 = disabled.
+    # Clamped to < finetune_epochs at runtime.
+    finetune_warmup_epochs: int = 0
     early_stop_patience: int = 6   # early stop when val checkpoint metric plateaus (stage 2)
     # Metric for best checkpoint + early stopping in stage 2 (finetune):
     #   "composite"    — 0.5·val_AUC + 0.25·val_sens + 0.25·val_spec  (threshold 0.5)
@@ -80,15 +95,23 @@ class Config:
     seeds: List[int] = field(default_factory=lambda: [42, 7, 2024])
 
     # ── Loss function ─────────────────────────────────────────────────────
+    # Focal loss (Model 22): if True, overrides composite and plain BCE.
+    use_focal_loss: bool = False
+    focal_gamma:    float = 2.0
     # False: standard BCE  |  True: 0.5*BCE + 0.5*(1 - soft_composite)
     use_composite_loss:    bool  = False
     # Blend weight α: α·BCE + (1-α)·(1-soft_composite).  0 = pure composite, 1 = pure BCE.
     composite_loss_alpha:  float = 0.5
     # Temperature for the pairwise-sigmoid soft-AUC term (higher → sharper ranking signal)
     composite_loss_gamma:  float = 1.0
+    # SoftCompositeLoss: σ(thr_temp·logit) approximates I[logit>0] (aligns with prob 0.5 threshold)
+    composite_thr_temperature: float = 6.0
+    # If fewer hard positives or negatives than this in a batch, skip composite term (BCE only).
+    composite_min_class_per_batch: int = 2
 
     # ── Inference ────────────────────────────────────────────────────────
-    tta_passes:  int = 6           # number of deterministic TTA transforms (max 6)
+    # ``tta_style=\"model22\"`` exposes 7 transforms; cap with ``tta_passes`` (≤7).
+    tta_passes:  int = 6
     n_bootstrap: int = 1000        # bootstrap iterations for threshold stabilisation
 
     # ── Device (auto-detected) ───────────────────────────────────────────

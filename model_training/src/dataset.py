@@ -94,6 +94,11 @@ class ChestXrayDataset(Dataset):
     backbone controls the normalization applied after PIL transforms:
         "densenet121"         → single-channel tensor in [-1024, 1024] (xrv)
         any torchvision model → 3-channel tensor with ImageNet normalization
+
+    When ``CFG.preprocessing_profile == \"model22\"`` and backbone is
+    ``rad-dino``, the Model 22 path applies: optional thorax crop (cached
+    bboxes), CLAHE, torchvision ``pil_transform``, optional albumentations
+    (train only), then RAD-DINO processor + RandomErasing.
     """
 
     def __init__(
@@ -102,12 +107,24 @@ class ChestXrayDataset(Dataset):
         pil_transform=None,
         use_erasing: bool = False,
         backbone: str | None = None,
+        preprocessing_profile: str | None = None,
     ) -> None:
         from src.config import CFG
         self.df = df.reset_index(drop=True)
         self.pil_transform = pil_transform
         self.use_erasing = use_erasing
-        self._normalize = get_normalize_fn(backbone or CFG.backbone)
+        bb = backbone or CFG.backbone
+        self._backbone = bb
+        prof = preprocessing_profile or getattr(CFG, "preprocessing_profile", "default")
+        self._model22_rad = prof == "model22" and bb == "rad-dino"
+        self._crop_to_thorax = bool(getattr(CFG, "crop_to_thorax", False)) if self._model22_rad else False
+        cache = getattr(CFG, "thorax_bbox_cache_path", "") or ""
+        self._bbox_cache = (
+            cache
+            if cache
+            else os.path.join(CFG.output_dir, "lung_bboxes.json")
+        )
+        self._normalize = get_normalize_fn(bb)
         self._erasing = T.RandomErasing(
             p=0.5, scale=(0.02, 0.08), ratio=(0.3, 3.3), value=0
         )
@@ -117,13 +134,31 @@ class ChestXrayDataset(Dataset):
 
     def __getitem__(self, idx: int):
         row = self.df.iloc[idx]
-        img = Image.open(row["image_path"]).convert("L")
-        if self.pil_transform is not None:
-            img = self.pil_transform(img)
-        normalize = getattr(self, "_normalize", xrv_normalize_np)
-        tensor = normalize(img)
-        if self.use_erasing:
-            tensor = self._erasing(tensor)
+        path = row["image_path"]
+        img = Image.open(path).convert("L")
+
+        if self._model22_rad:
+            from src import model22_preprocess as m22
+
+            if self._crop_to_thorax:
+                img = m22.crop_thorax_pil(img, path, self._bbox_cache)
+            img = m22.apply_clahe_pil(img)
+            if self.pil_transform is not None:
+                img = self.pil_transform(img)
+            if self.use_erasing:
+                img = m22.augment_medical_pil(img)
+            normalize = getattr(self, "_normalize", rad_dino_normalize)
+            tensor = normalize(img)
+            if self.use_erasing:
+                tensor = self._erasing(tensor)
+        else:
+            if self.pil_transform is not None:
+                img = self.pil_transform(img)
+            normalize = getattr(self, "_normalize", xrv_normalize_np)
+            tensor = normalize(img)
+            if self.use_erasing:
+                tensor = self._erasing(tensor)
+
         label = torch.tensor(float(row["label"]), dtype=torch.float32)
         return tensor, label, row["filename"]
 
@@ -140,12 +175,24 @@ class TTADataset(Dataset):
         pil_transform,
         image_dir: Optional[str] = None,
         backbone: str | None = None,
+        preprocessing_profile: str | None = None,
     ) -> None:
         from src.config import CFG
         self.df = df.reset_index(drop=True)
         self.pil_transform = pil_transform
         self.image_dir = image_dir
-        self._normalize = get_normalize_fn(backbone or CFG.backbone)
+        bb = backbone or CFG.backbone
+        self._backbone = bb
+        prof = preprocessing_profile or getattr(CFG, "preprocessing_profile", "default")
+        self._model22_rad = prof == "model22" and bb == "rad-dino"
+        self._crop_to_thorax = bool(getattr(CFG, "crop_to_thorax", False)) if self._model22_rad else False
+        cache = getattr(CFG, "thorax_bbox_cache_path", "") or ""
+        self._bbox_cache = (
+            cache
+            if cache
+            else os.path.join(CFG.output_dir, "lung_bboxes.json")
+        )
+        self._normalize = get_normalize_fn(bb)
 
     def __len__(self) -> int:
         return len(self.df)
@@ -155,8 +202,15 @@ class TTADataset(Dataset):
         if "image_path" in row and pd.notna(row.get("image_path")):
             path = row["image_path"]
         else:
-            path = os.path.join(self.image_dir, row["filename"])
+            path = os.path.join(self.image_dir or "", row["filename"])
         img = Image.open(path).convert("L")
+
+        if self._model22_rad:
+            from src import model22_preprocess as m22
+
+            if self._crop_to_thorax:
+                img = m22.crop_thorax_pil(img, path, self._bbox_cache)
+            img = m22.apply_clahe_pil(img)
         img = self.pil_transform(img)
         normalize = getattr(self, "_normalize", xrv_normalize_np)
         tensor = normalize(img)
@@ -179,11 +233,23 @@ class SubmissionDataset(Dataset):
         image_dir: str,
         pil_transform=None,
         backbone: str | None = None,
+        preprocessing_profile: str | None = None,
     ) -> None:
         from src.config import CFG
         self.image_dir = image_dir
         self.pil_transform = pil_transform
-        self._normalize = get_normalize_fn(backbone or CFG.backbone)
+        bb = backbone or CFG.backbone
+        self._backbone = bb
+        prof = preprocessing_profile or getattr(CFG, "preprocessing_profile", "default")
+        self._model22_rad = prof == "model22" and bb == "rad-dino"
+        self._crop_to_thorax = bool(getattr(CFG, "crop_to_thorax", False)) if self._model22_rad else False
+        cache = getattr(CFG, "thorax_bbox_cache_path", "") or ""
+        self._bbox_cache = (
+            cache
+            if cache
+            else os.path.join(CFG.output_dir, "lung_bboxes.json")
+        )
+        self._normalize = get_normalize_fn(bb)
         self.image_files = sorted(
             f for f in os.listdir(image_dir)
             if f.lower().endswith((".png", ".jpg", ".jpeg"))
@@ -194,7 +260,14 @@ class SubmissionDataset(Dataset):
 
     def __getitem__(self, idx: int):
         fname = self.image_files[idx]
-        img = Image.open(os.path.join(self.image_dir, fname)).convert("L")
+        path = os.path.join(self.image_dir, fname)
+        img = Image.open(path).convert("L")
+        if self._model22_rad:
+            from src import model22_preprocess as m22
+
+            if self._crop_to_thorax:
+                img = m22.crop_thorax_pil(img, path, self._bbox_cache)
+            img = m22.apply_clahe_pil(img)
         if self.pil_transform is not None:
             img = self.pil_transform(img)
         normalize = getattr(self, "_normalize", xrv_normalize_np)
