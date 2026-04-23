@@ -26,7 +26,7 @@ export function AppHeader() {
             <Activity className="h-5 w-5" strokeWidth={2.5} />
           </span>
           <div className="flex flex-col leading-tight">
-            <span className="text-sm font-semibold tracking-tight">CardioScan</span>
+            <span className="text-sm font-semibold tracking-tight">Coraçai</span>
             <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
               AI Radiology Assist
             </span>
