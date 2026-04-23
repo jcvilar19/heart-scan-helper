@@ -1,13 +1,6 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import {
-  AlertTriangle,
-  CheckCircle2,
-  History as HistoryIcon,
-  Search,
-  Trash2,
-  X,
-} from "lucide-react";
+import { AlertTriangle, CheckCircle2, History as HistoryIcon, Search, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { AppHeader } from "@/components/app-header";
 import { Button } from "@/components/ui/button";
@@ -48,7 +41,6 @@ function HistoryPage() {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
-
 
   const filteredRows = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -127,11 +119,9 @@ function HistoryPage() {
               Your most recent saved scans, newest first.
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <Button asChild variant="outline" size="sm">
-              <Link to="/">New scan</Link>
-            </Button>
-          </div>
+          <Button asChild variant="outline" size="sm">
+            <Link to="/">New scan</Link>
+          </Button>
         </div>
 
         {!loading && rows.length > 0 && (
