@@ -109,7 +109,7 @@ function AuthPage() {
           >
             <Activity className="h-5 w-5" strokeWidth={2.5} />
           </span>
-          <span className="text-lg font-semibold tracking-tight">CardioScan</span>
+          <span className="text-lg font-semibold tracking-tight">Coraçai</span>
         </Link>
 
         <div
