@@ -420,11 +420,14 @@ function ReportDialog({
       return;
     }
     setError(null);
-    await onGenerate({
-      doctorName: doctorName.trim(),
-      patientName: patientName.trim(),
-      patientId: patientId.trim(),
-    });
+    await onGenerate(
+      {
+        doctorName: doctorName.trim(),
+        patientName: patientName.trim(),
+        patientId: patientId.trim(),
+      },
+      includeAi,
+    );
   };
 
   return (
@@ -475,8 +478,32 @@ function ReportDialog({
               </p>
             )}
           </div>
+          <div
+            className="flex items-start gap-3 rounded-md border border-border p-3"
+            style={{ background: "color-mix(in oklab, var(--primary) 4%, transparent)" }}
+          >
+            <Checkbox
+              id="report-include-ai"
+              checked={includeAi}
+              onCheckedChange={(v) => setIncludeAi(v === true)}
+              className="mt-0.5"
+            />
+            <div className="flex-1 space-y-0.5">
+              <Label
+                htmlFor="report-include-ai"
+                className="flex cursor-pointer items-center gap-1.5 text-sm font-medium"
+              >
+                <Sparkles className="h-3.5 w-3.5 text-primary" />
+                Include AI clinical summary
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                Adds a dedicated page with an AI-generated case summary. Adds a few seconds to
+                generation.
+              </p>
+            </div>
+          </div>
           {error && (
-            <p className="rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">
+            <p className="rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1 text-xs text-destructive">
               {error}
             </p>
           )}
