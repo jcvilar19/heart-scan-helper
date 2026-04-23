@@ -10,13 +10,14 @@
  * Unchanged: HTTPS production (Lovable, ngrok), and env URLs that already
  * use a non-loopback host.
  */
+/**
+ * Public Hugging Face Space hosting the FastAPI inference server.
+ * Used as the default when no VITE_PREDICT_API_URL is configured.
+ */
+const DEFAULT_PREDICT_API_URL = "https://jcvilar-cardio-scan-api.hf.space";
+
 export function resolvePredictApiBaseUrl(): string {
-  const configured = import.meta.env.VITE_PREDICT_API_URL ?? "";
-  if (!configured) {
-    throw new Error(
-      "VITE_PREDICT_API_URL is not configured. Add it to .env and restart the dev server.",
-    );
-  }
+  const configured = import.meta.env.VITE_PREDICT_API_URL ?? DEFAULT_PREDICT_API_URL;
   if (typeof window === "undefined") {
     return configured;
   }

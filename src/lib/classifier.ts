@@ -61,12 +61,6 @@ export async function classifyImage(file: File): Promise<ClassificationResult> {
     return mockClassify(file);
   }
 
-  if (!import.meta.env.VITE_PREDICT_API_URL) {
-    throw new Error(
-      "Predict API is not configured. Set VITE_PREDICT_API_URL in .env (e.g. http://localhost:8000) and restart the dev server.",
-    );
-  }
-
   try {
     const response = await requestPrediction(file);
     const probability = Math.min(1, Math.max(0, response.confidence));
