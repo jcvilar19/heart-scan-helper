@@ -4,20 +4,17 @@ import {
   AlertTriangle,
   CheckCircle2,
   History as HistoryIcon,
-  Loader2,
   Search,
-  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import ReactMarkdown from "react-markdown";
 import { AppHeader } from "@/components/app-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ScanAiInsight } from "@/components/scan-ai-insight";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
-import type { ComponentProps } from "react";
 import { cn } from "@/lib/utils";
 
 const markdownComponents = {
