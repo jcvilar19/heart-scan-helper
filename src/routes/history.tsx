@@ -4,41 +4,19 @@ import {
   AlertTriangle,
   CheckCircle2,
   History as HistoryIcon,
-  Loader2,
   Search,
-  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import ReactMarkdown from "react-markdown";
 import { AppHeader } from "@/components/app-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ScanAiInsight } from "@/components/scan-ai-insight";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
-import type { ComponentProps } from "react";
 import { cn } from "@/lib/utils";
 
-const markdownComponents = {
-  h1: (props: ComponentProps<"h3">) => <h3 className="mt-4 text-base font-semibold" {...props} />,
-  h2: (props: ComponentProps<"h3">) => <h3 className="mt-4 text-base font-semibold" {...props} />,
-  h3: (props: ComponentProps<"h4">) => <h4 className="mt-3 text-sm font-semibold" {...props} />,
-  p: (props: ComponentProps<"p">) => <p className="text-sm text-foreground/90" {...props} />,
-  ul: (props: ComponentProps<"ul">) => (
-    <ul className="list-disc space-y-1 pl-5 text-sm" {...props} />
-  ),
-  ol: (props: ComponentProps<"ol">) => (
-    <ol className="list-decimal space-y-1 pl-5 text-sm" {...props} />
-  ),
-  li: (props: ComponentProps<"li">) => <li className="text-foreground/90" {...props} />,
-  strong: (props: ComponentProps<"strong">) => (
-    <strong className="font-semibold text-foreground" {...props} />
-  ),
-  code: (props: ComponentProps<"code">) => (
-    <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs" {...props} />
-  ),
-};
 
 export const Route = createFileRoute("/history")({
   component: HistoryPage,
@@ -70,55 +48,7 @@ function HistoryPage() {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiSummary, setAiSummary] = useState<string | null>(null);
-  const [aiError, setAiError] = useState<string | null>(null);
 
-  const handleAiSummary = async () => {
-    if (rows.length === 0) return;
-    setAiLoading(true);
-    setAiError(null);
-    setAiSummary(null);
-    try {
-      const scans = (filteredRows.length > 0 ? filteredRows : rows).slice(0, 100).map((r) => ({
-        patient_name: r.patient_name,
-        patient_id: r.patient_id,
-        image_name: r.image_name,
-        probability: r.probability,
-        prediction: r.prediction,
-        pathology: r.pathology,
-        notes: r.notes,
-        created_at: r.created_at,
-      }));
-
-      const { data, error } = await supabase.functions.invoke("summarize-history", {
-        body: { scans },
-      });
-      if (error) {
-        // Try to surface server-provided error message
-        let serverMsg: string | null = null;
-        try {
-          const ctx = (error as { context?: Response }).context;
-          if (ctx && typeof ctx.json === "function") {
-            const body = await ctx.json();
-            serverMsg = body?.error ?? null;
-          }
-        } catch {
-          // ignore
-        }
-        throw new Error(serverMsg ?? error.message);
-      }
-      const summary = (data as { summary?: string } | null)?.summary;
-      if (!summary) throw new Error("Empty response from AI service.");
-      setAiSummary(summary);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to generate summary.";
-      setAiError(msg);
-      toast.error(msg);
-    } finally {
-      setAiLoading(false);
-    }
-  };
 
   const filteredRows = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -198,20 +128,6 @@ function HistoryPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleAiSummary}
-              disabled={aiLoading || rows.length === 0}
-              className="gap-1.5"
-            >
-              {aiLoading ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Sparkles className="h-3.5 w-3.5" />
-              )}
-              {aiLoading ? "Analyzing…" : "AI summary"}
-            </Button>
             <Button asChild variant="outline" size="sm">
               <Link to="/">New scan</Link>
             </Button>
@@ -244,51 +160,6 @@ function HistoryPage() {
               {filteredRows.length} of {rows.length}
             </span>
           </div>
-        )}
-
-        {(aiLoading || aiSummary || aiError) && (
-          <section
-            className="mb-6 rounded-2xl border border-border bg-card p-5"
-            style={{ boxShadow: "var(--shadow-card)" }}
-            aria-live="polite"
-          >
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <span
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-full"
-                  style={{ background: "var(--gradient-primary)", color: "var(--primary-foreground)" }}
-                >
-                  <Sparkles className="h-3.5 w-3.5" />
-                </span>
-                <h2 className="text-sm font-semibold">AI summary &amp; suggestions</h2>
-              </div>
-              {(aiSummary || aiError) && !aiLoading && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAiSummary(null);
-                    setAiError(null);
-                  }}
-                  className="rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-                  aria-label="Dismiss summary"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              )}
-            </div>
-            {aiLoading ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Reviewing your recent scans…
-              </div>
-            ) : aiError ? (
-              <p className="text-sm text-destructive">{aiError}</p>
-            ) : aiSummary ? (
-              <div className="space-y-2 text-sm leading-relaxed">
-                <ReactMarkdown components={markdownComponents}>{aiSummary}</ReactMarkdown>
-              </div>
-            ) : null}
-          </section>
         )}
 
         {loading ? (
@@ -405,6 +276,18 @@ function HistoryPage() {
                         {r.probability.toFixed(3)}
                       </span>
                     </div>
+                    <ScanAiInsight
+                      scan={{
+                        patient_name: r.patient_name,
+                        patient_id: r.patient_id,
+                        image_name: r.image_name,
+                        probability: r.probability,
+                        prediction: r.prediction,
+                        pathology: r.pathology,
+                        notes: r.notes,
+                        created_at: r.created_at,
+                      }}
+                    />
                   </div>
                 </article>
               );
