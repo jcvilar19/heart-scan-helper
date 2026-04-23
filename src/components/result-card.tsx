@@ -307,17 +307,6 @@ function ResultState({
           />
         </div>
       )}
-      <ScanAiInsight
-        scan={{
-          patient_name: item.patientName || null,
-          patient_id: item.patientId || null,
-          image_name: item.file.name,
-          probability: item.result.probability,
-          prediction: item.result.prediction,
-          pathology: "cardiomegaly",
-          notes: item.notes || null,
-        }}
-      />
       <NotesBlock {...sharedNotesProps} />
       <ScanAiInsight
         scan={{
