@@ -9,7 +9,9 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from sklearn.metrics import confusion_matrix, roc_auc_score
 from torch.utils.data import DataLoader
 
@@ -85,27 +87,59 @@ def infer_bce_pos_weight_tensor(
     return torch.tensor([w], device=device, dtype=torch.float32)
 
 
+def infer_focal_pos_weight_tensor(
+    train_loader: DataLoader,
+    device: str,
+) -> Optional[torch.Tensor]:
+    """``pos_weight = n_neg / n_pos`` on the training split (Model 22 focal loss)."""
+    ds = train_loader.dataset
+    if hasattr(ds, "df"):
+        y = ds.df["label"].to_numpy(dtype=np.float64)
+    elif hasattr(ds, "labels"):
+        y = ds.labels.detach().cpu().numpy()
+    else:
+        return None
+    n_pos = int(np.sum(y >= 0.5))
+    n_neg = int(len(y) - n_pos)
+    if n_pos <= 0 or n_neg < 0:
+        return None
+    w = float(n_neg) / float(n_pos)
+    return torch.tensor([w], device=device, dtype=torch.float32)
+
+
+class FocalLoss(nn.Module):
+    """Focal loss on logits (Model 22: γ=2, optional ``pos_weight``)."""
+
+    def __init__(self, gamma: float = 2.0, pos_weight: Optional[torch.Tensor] = None) -> None:
+        super().__init__()
+        self.gamma = float(gamma)
+        self._pw = pos_weight
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        pw = self._pw
+        if pw is not None and pw.device != logits.device:
+            pw = pw.to(logits.device)
+        bce = F.binary_cross_entropy_with_logits(
+            logits, targets, pos_weight=pw, reduction="none"
+        )
+        pt = torch.exp(-bce)
+        return ((1.0 - pt) ** self.gamma * bce).mean()
+
+
 class SoftCompositeLoss(nn.Module):
     """Differentiable approximation of composite = 0.5·AUC + 0.25·sens + 0.25·spec.
 
     Minimises ``1 - soft_composite``, blended with standard BCE for stability.
 
-    Soft-AUC
-        Pairwise sigmoid over all (positive, negative) logit pairs in the batch:
-        ``soft_auc = mean( σ(γ · (logit⁺ − logit⁻)) )``
-        where γ (``auc_gamma``) is a sharpness temperature.
+    **Design (v2)** — closer to the evaluated composite and more stable on small batches:
 
-    Soft-sens / soft-spec
-        ``soft_sens = mean( σ(logit) | y=1 )``
-        ``soft_spec = mean( 1 − σ(logit) | y=0 )``
-
-    Total loss
-        ``α · BCE  +  (1 − α) · (1 − soft_composite)``
-
-    Args:
-        alpha:     Weight of BCE in the blend (0 = pure composite, 1 = pure BCE).
-        auc_gamma: Temperature for the pairwise sigmoid (higher → sharper AUC signal).
-        eps:       Numerical stability floor.
+    * **Sens/spec:** ``σ(t·logit)`` / ``σ(−t·logit)`` with temperature ``t = thr_temperature``,
+      weighted by **soft** ``target`` (works with mixup / label smoothing).
+    * **Soft-AUC:** pairwise term only if ≥ ``min_class_per_batch`` **strict** positives
+      and negatives (`y > 0.5` / `y < 0.5`); otherwise **BCE-only** for this batch (no
+      meaningless ``soft_auc = 0.5`` gradient).
+    * **Imbalance:** if ``pos_weight`` is set, sens/spec block uses
+      ``0.5·(w·soft_sens + soft_spec)/(w+1)`` in line with BCE's positive weighting.
     """
 
     def __init__(
@@ -114,41 +148,52 @@ class SoftCompositeLoss(nn.Module):
         auc_gamma: float = 1.0,
         eps: float = 1e-7,
         pos_weight: Optional[torch.Tensor] = None,
+        thr_temperature: float = 6.0,
+        min_class_per_batch: int = 2,
     ):
         super().__init__()
-        self.alpha     = alpha
-        self.auc_gamma = auc_gamma
-        self.eps       = eps
-        self._bce      = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        self.alpha                 = alpha
+        self.auc_gamma             = auc_gamma
+        self.eps                   = eps
+        self.thr_temperature       = float(thr_temperature)
+        self.min_class_per_batch   = int(min_class_per_batch)
+        self._bce                  = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        self._pos_w_scalar: Optional[float] = (
+            float(pos_weight.detach().cpu().item()) if pos_weight is not None else None
+        )
 
     def forward(self, logit: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         bce_loss = self._bce(logit, target)
 
-        prob     = torch.sigmoid(logit)
-        # Use > 0.5 so the masks work correctly for both hard labels {0,1}
-        # and soft targets produced by mixup or label smoothing.
-        pos_mask = (target > 0.5)
-        neg_mask = ~pos_mask
-        n_pos    = pos_mask.sum()
-        n_neg    = neg_mask.sum()
+        pos_hard = target > 0.5
+        neg_hard = target < 0.5
+        n_pos_h  = int(pos_hard.sum().item())
+        n_neg_h  = int(neg_hard.sum().item())
 
-        # ── Soft AUC (pairwise) ──────────────────────────────────────────────
-        if n_pos > 0 and n_neg > 0:
-            pos_logits = logit[pos_mask]                                  # (n_pos,)
-            neg_logits = logit[neg_mask]                                  # (n_neg,)
-            diff       = pos_logits.unsqueeze(1) - neg_logits.unsqueeze(0)  # (n_pos, n_neg)
-            soft_auc   = torch.sigmoid(self.auc_gamma * diff).mean()
+        if n_pos_h < self.min_class_per_batch or n_neg_h < self.min_class_per_batch:
+            return bce_loss
+
+        pos_logits = logit[pos_hard]
+        neg_logits = logit[neg_hard]
+        diff       = pos_logits.unsqueeze(1) - neg_logits.unsqueeze(0)
+        soft_auc   = torch.sigmoid(self.auc_gamma * diff).mean()
+
+        t       = self.thr_temperature
+        p_hit   = torch.sigmoid(t * logit)
+        p_miss  = torch.sigmoid(-t * logit)
+        pos_m   = target.sum().clamp_min(self.eps)
+        neg_m   = (1.0 - target).sum().clamp_min(self.eps)
+        soft_sens = (target * p_hit).sum() / pos_m
+        soft_spec = ((1.0 - target) * p_miss).sum() / neg_m
+
+        if self._pos_w_scalar is not None:
+            w = min(max(self._pos_w_scalar, 1.0), 100.0)
+            sens_spec_block = 0.5 * (w * soft_sens + soft_spec) / (w + 1.0)
         else:
-            soft_auc = torch.tensor(0.5, device=logit.device, dtype=logit.dtype)
+            sens_spec_block = 0.25 * soft_sens + 0.25 * soft_spec
 
-        # ── Soft sensitivity / specificity ──────────────────────────────────
-        soft_sens = prob[pos_mask].mean() if n_pos > 0 else torch.tensor(
-            0.0, device=logit.device, dtype=logit.dtype)
-        soft_spec = (1.0 - prob[neg_mask]).mean() if n_neg > 0 else torch.tensor(
-            0.0, device=logit.device, dtype=logit.dtype)
-
-        soft_composite  = 0.5 * soft_auc + 0.25 * soft_sens + 0.25 * soft_spec
-        composite_loss  = 1.0 - soft_composite
+        soft_composite = 0.5 * soft_auc + sens_spec_block
+        composite_loss = 1.0 - soft_composite
 
         return self.alpha * bce_loss + (1.0 - self.alpha) * composite_loss
 
@@ -185,7 +230,10 @@ def precompute_cls_embeddings(
     loader: DataLoader,
     config=None,
 ) -> Tuple[torch.Tensor, torch.Tensor, list]:
-    """Run the frozen RAD-DINO backbone over *loader* once and cache CLS tokens.
+    """Run the frozen RAD-DINO backbone over *loader* once and cache head inputs.
+
+    Caches ``concat(CLS, mean(patch tokens))`` — same representation as
+    ``RadDinoWrapper.forward`` — so Stage-1 trains only the MLP on fixed vectors.
 
     Returns CPU tensors ``(embeddings, labels, names)`` ready to wrap in an
     ``EmbeddingDataset``.  The backbone is never updated here — this is purely
@@ -200,8 +248,11 @@ def precompute_cls_embeddings(
         for x, y, names in loader:
             x   = x.to(cfg.device, non_blocking=pin)
             out = model.features(pixel_values=x)
-            cls = out.last_hidden_state[:, 0].float().cpu()  # (B, 768)
-            all_embeds.append(cls)
+            h   = out.last_hidden_state
+            cls = h[:, 0]
+            pm  = h[:, 1:].mean(dim=1)
+            z   = torch.cat([cls, pm], dim=-1).float().cpu()  # (B, 1536)
+            all_embeds.append(z)
             all_labels.append(y.float())
             all_names.extend(list(names))
     return torch.cat(all_embeds), torch.cat(all_labels), all_names
@@ -214,7 +265,7 @@ def _run_epoch_head_only(
     optimizer: Optional[optim.Optimizer] = None,
     label_smoothing: float = 0.0,
 ) -> dict:
-    """Train / evaluate the classifier head on pre-computed CLS embeddings.
+    """Train / evaluate the classifier head on pre-computed RAD-DINO head inputs.
 
     Inputs are ``(embedding, label, name)`` batches from ``EmbeddingDataset``.
     No AMP or mixup — the bottleneck is the tiny MLP, not image tensors.
@@ -403,18 +454,33 @@ def train_one_seed(
 
     _pw_scale = getattr(cfg, "bce_pos_weight_scale", 0.0)
     _pos_w    = infer_bce_pos_weight_tensor(train_loader, _pw_scale, cfg.device)
-    if _pos_w is not None:
+    if _pos_w is not None and not getattr(cfg, "use_focal_loss", False):
         print(f"  BCE pos_weight: {_pos_w.item():.4f}  (scale={_pw_scale} × n_neg/n_pos on train split)")
 
-    if cfg.use_composite_loss:
+    if getattr(cfg, "use_focal_loss", False):
+        if cfg.use_composite_loss:
+            print("  Note: use_focal_loss=True → ignoring use_composite_loss for this run.")
+        f_pw = infer_focal_pos_weight_tensor(train_loader, cfg.device)
+        if f_pw is not None:
+            print(f"  Focal pos_weight (n_neg/n_pos): {f_pw.item():.4f}")
+        criterion = FocalLoss(
+            gamma=float(getattr(cfg, "focal_gamma", 2.0)),
+            pos_weight=f_pw,
+        )
+        print(f"  Loss    : FocalLoss  (γ={getattr(cfg, 'focal_gamma', 2.0)})")
+    elif cfg.use_composite_loss:
         criterion = SoftCompositeLoss(
             alpha=cfg.composite_loss_alpha,
             auc_gamma=cfg.composite_loss_gamma,
             pos_weight=_pos_w,
+            thr_temperature=getattr(cfg, "composite_thr_temperature", 6.0),
+            min_class_per_batch=getattr(cfg, "composite_min_class_per_batch", 2),
         )
         print(
             f"  Loss    : SoftCompositeLoss  "
-            f"(α={cfg.composite_loss_alpha}, γ={cfg.composite_loss_gamma})"
+            f"(α={cfg.composite_loss_alpha}, γ={cfg.composite_loss_gamma}, "
+            f"thr_t={getattr(cfg, 'composite_thr_temperature', 6.0)}, "
+            f"min_cls={getattr(cfg, 'composite_min_class_per_batch', 2)})"
         )
     else:
         criterion = nn.BCEWithLogitsLoss(pos_weight=_pos_w)
@@ -441,7 +507,7 @@ def train_one_seed(
     # 256-unit MLP head, skipping the frozen ViT forward on every batch (~10× faster).
     _rad_dino_mode = isinstance(model, RadDinoWrapper)
     if _rad_dino_mode:
-        print("  [rad-dino] Pre-computing CLS embeddings for Stage 1 ...")
+        print("  [rad-dino] Pre-computing CLS+patch-mean embeddings for Stage 1 ...")
         import time as _time
         _t0 = _time.time()
         _t_embeds, _t_labels, _t_names = precompute_cls_embeddings(model, train_loader, cfg)
@@ -504,9 +570,17 @@ def train_one_seed(
         ],
         weight_decay=cfg.weight_decay,
     )
-    sched = optim.lr_scheduler.CosineAnnealingLR(
-        opt_ft, T_max=cfg.finetune_epochs, eta_min=cfg.backbone_lr * 0.01,
-    )
+    finet_e = int(cfg.finetune_epochs)
+    warmup  = max(0, min(int(getattr(cfg, "finetune_warmup_epochs", 0)), max(0, finet_e - 1)))
+    eta_min = cfg.backbone_lr * 0.01
+    if warmup > 0:
+        lin = LinearLR(opt_ft, start_factor=0.1, end_factor=1.0, total_iters=warmup)
+        cos_T = max(1, finet_e - warmup)
+        cos = CosineAnnealingLR(opt_ft, T_max=cos_T, eta_min=eta_min)
+        sched = SequentialLR(opt_ft, schedulers=[lin, cos], milestones=[warmup])
+        print(f"  Stage 2 LR: {warmup} warmup epochs (10%→100% LR) + cosine ({cos_T} steps, eta_min={eta_min:.2e})")
+    else:
+        sched = CosineAnnealingLR(opt_ft, T_max=finet_e, eta_min=eta_min)
 
     checkpoint_metric = getattr(cfg, "checkpoint_metric", "composite")
     if checkpoint_metric not in ("auc", "composite", "sensitivity"):
@@ -670,8 +744,11 @@ def tta_predict(
     Predictions are averaged in **logit space** across all TTA passes.
     """
     cfg = config or CFG
-    tta_transforms = tta_transforms or make_tta_transforms(cfg.img_size)
-    tta_transforms = tta_transforms[:cfg.tta_passes]
+    tta_transforms = tta_transforms or make_tta_transforms(
+        cfg.img_size,
+        style=getattr(cfg, "tta_style", "default"),
+    )
+    tta_transforms = tta_transforms[: int(cfg.tta_passes)]
 
     all_logits: list[np.ndarray] = []
     names_ref, labels_ref = None, None
@@ -680,7 +757,7 @@ def tta_predict(
     amp_ctx = torch.cuda.amp.autocast(enabled=(cfg.device == "cuda"))
 
     for tf in tta_transforms:
-        ds = TTADataset(df, tf, image_dir)
+        ds = TTADataset(df, tf, image_dir, backbone=cfg.backbone)
         loader = DataLoader(
             ds, batch_size=cfg.batch_size, num_workers=cfg.num_workers,
             pin_memory=pin, shuffle=False,
