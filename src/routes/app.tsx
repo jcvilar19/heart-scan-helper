@@ -336,12 +336,12 @@ function AppPage() {
             Signed in · Ready to analyze
           </div>
           <h1 className="text-balance text-3xl font-bold tracking-tight sm:text-4xl">
-            Upload chest X-rays for{" "}
+            Upload Chest X-rays for{" "}
             <span
               className="bg-clip-text text-transparent"
               style={{ backgroundImage: "var(--gradient-primary)" }}
             >
-              cardiomegaly screening
+              Cardiomegaly Screening
             </span>
           </h1>
           <p className="mx-auto mt-3 max-w-2xl text-pretty text-sm text-muted-foreground sm:text-base">
