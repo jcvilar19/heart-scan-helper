@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { jsPDF } from "jspdf";
 import {
   Trash2,
   Loader2,
@@ -8,7 +7,9 @@ import {
   FileDown,
   Cloud,
   CloudOff,
+  Sparkles,
 } from "lucide-react";
+import { toast } from "sonner";
 import { PATHOLOGY_LABEL, type ClassificationResult } from "@/lib/classifier";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,8 +22,11 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { ScanAiInsight } from "@/components/scan-ai-insight";
 import { useAuth } from "@/hooks/use-auth";
+import { supabase } from "@/integrations/supabase/client";
+import { generateReport, safeFilenameFragment, type ReportPatient } from "@/lib/pdf-report";
 
 export type AnalysisStatus = "pending" | "validating" | "analyzing" | "done" | "error";
 export type SaveStatus = "idle" | "saving" | "saved" | "error";
