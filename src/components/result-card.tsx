@@ -392,6 +392,17 @@ function ResultState({
         </div>
       )}
       <NotesBlock {...sharedNotesProps} />
+      <ScanAiInsight
+        scan={{
+          patient_name: item.patientName,
+          patient_id: item.patientId,
+          image_name: item.file.name,
+          probability: item.result.probability,
+          prediction: item.result.prediction,
+          pathology: item.result.label || PATHOLOGY_LABEL,
+          notes: item.notes,
+        }}
+      />
       {dialog}
     </div>
   );
