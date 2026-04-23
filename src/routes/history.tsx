@@ -48,55 +48,7 @@ function HistoryPage() {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiSummary, setAiSummary] = useState<string | null>(null);
-  const [aiError, setAiError] = useState<string | null>(null);
 
-  const handleAiSummary = async () => {
-    if (rows.length === 0) return;
-    setAiLoading(true);
-    setAiError(null);
-    setAiSummary(null);
-    try {
-      const scans = (filteredRows.length > 0 ? filteredRows : rows).slice(0, 100).map((r) => ({
-        patient_name: r.patient_name,
-        patient_id: r.patient_id,
-        image_name: r.image_name,
-        probability: r.probability,
-        prediction: r.prediction,
-        pathology: r.pathology,
-        notes: r.notes,
-        created_at: r.created_at,
-      }));
-
-      const { data, error } = await supabase.functions.invoke("summarize-history", {
-        body: { scans },
-      });
-      if (error) {
-        // Try to surface server-provided error message
-        let serverMsg: string | null = null;
-        try {
-          const ctx = (error as { context?: Response }).context;
-          if (ctx && typeof ctx.json === "function") {
-            const body = await ctx.json();
-            serverMsg = body?.error ?? null;
-          }
-        } catch {
-          // ignore
-        }
-        throw new Error(serverMsg ?? error.message);
-      }
-      const summary = (data as { summary?: string } | null)?.summary;
-      if (!summary) throw new Error("Empty response from AI service.");
-      setAiSummary(summary);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to generate summary.";
-      setAiError(msg);
-      toast.error(msg);
-    } finally {
-      setAiLoading(false);
-    }
-  };
 
   const filteredRows = useMemo(() => {
     const q = query.trim().toLowerCase();
