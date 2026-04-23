@@ -28,7 +28,7 @@ export const Route = createFileRoute("/app")({
       { title: "Scanner — Coraçai" },
       {
         name: "description",
-        content: "Upload chest X-rays and get an AI cardiomegaly probability score.",
+        content: "Upload Chest X-rays and get an AI Cardiomegaly Screening probability score.",
       },
     ],
   }),
