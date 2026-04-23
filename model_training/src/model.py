@@ -20,12 +20,14 @@ class RadDinoWrapper(nn.Module):
     Architecture
     ────────────
     .features   — the full Dinov2Model (embeddings + 12 transformer blocks + layernorm)
-    .classifier — MLP head: Linear(768→256) → GELU → Dropout(0.3) → Linear(256→1)
+    .classifier — MLP head on **[CLS ∥ mean(patch tokens)]** (1536→256) → GELU →
+                  Dropout(0.3) → Linear(256→1)
 
     Forward pass
     ────────────
     x : (B, 3, H, W) MIMIC-CXR-normalised tensor, any multiple of 14 px.
         Recommended resolution: 518 × 518 (native: 37 × 37 patches at 14 px).
+    Pooling: CLS token concatenated with mean of patch tokens (excludes CLS).
     Returns (B, 1) logit tensor; ``cardio_logit`` squeezes to (B,).
 
     Freeze / unfreeze
@@ -42,8 +44,9 @@ class RadDinoWrapper(nn.Module):
         dinov2 = AutoModel.from_pretrained("microsoft/rad-dino")
         self.features = dinov2
         hidden = dinov2.config.hidden_size  # 768 for ViT-B
+        self._head_in = hidden * 2  # CLS + mean(patch tokens)
         self.classifier = nn.Sequential(
-            nn.Linear(hidden, 256),
+            nn.Linear(self._head_in, 256),
             nn.GELU(),
             nn.Dropout(0.3),
             nn.Linear(256, 1),
@@ -64,8 +67,11 @@ class RadDinoWrapper(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         out = self.features(pixel_values=x)   # Dinov2ModelOutput
-        cls = out.last_hidden_state[:, 0]     # CLS token  (B, 768)
-        return self.classifier(cls)           # (B, 1)
+        h   = out.last_hidden_state           # (B, 1 + n_patches, 768)
+        cls = h[:, 0]
+        patch_mean = h[:, 1:].mean(dim=1)
+        z   = torch.cat([cls, patch_mean], dim=-1)
+        return self.classifier(z)             # (B, 1)
 
 
 # ---------------------------------------------------------------------------

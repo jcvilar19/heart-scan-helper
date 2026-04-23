@@ -31,6 +31,9 @@ class Config:
     # ── Training schedule (two-stage) ────────────────────────────────────
     frozen_epochs:   int = 3       # stage 1: head-only warmup
     finetune_epochs: int = 22      # stage 2: full unfreeze with cosine LR
+    # Stage 2: linear LR warmup (all param groups) before cosine decay. 0 = disabled.
+    # Clamped to < finetune_epochs at runtime.
+    finetune_warmup_epochs: int = 0
     early_stop_patience: int = 6   # early stop when val checkpoint metric plateaus (stage 2)
     # Metric for best checkpoint + early stopping in stage 2 (finetune):
     #   "composite"    — 0.5·val_AUC + 0.25·val_sens + 0.25·val_spec  (threshold 0.5)
@@ -86,6 +89,10 @@ class Config:
     composite_loss_alpha:  float = 0.5
     # Temperature for the pairwise-sigmoid soft-AUC term (higher → sharper ranking signal)
     composite_loss_gamma:  float = 1.0
+    # SoftCompositeLoss: σ(thr_temp·logit) approximates I[logit>0] (aligns with prob 0.5 threshold)
+    composite_thr_temperature: float = 6.0
+    # If fewer hard positives or negatives than this in a batch, skip composite term (BCE only).
+    composite_min_class_per_batch: int = 2
 
     # ── Inference ────────────────────────────────────────────────────────
     tta_passes:  int = 6           # number of deterministic TTA transforms (max 6)
