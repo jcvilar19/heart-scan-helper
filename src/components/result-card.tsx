@@ -166,7 +166,7 @@ async function downloadPdf(item: AnalysisItem, info: ReportPatient): Promise<voi
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(16);
-  doc.text("CardioScan — Patient Report", margin, y);
+  doc.text("Coraçai — Patient Report", margin, y);
   y += 9;
 
   doc.setFont("helvetica", "normal");
