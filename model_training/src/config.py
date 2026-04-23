@@ -31,7 +31,16 @@ class Config:
     # ── Training schedule (two-stage) ────────────────────────────────────
     frozen_epochs:   int = 3       # stage 1: head-only warmup
     finetune_epochs: int = 22      # stage 2: full unfreeze with cosine LR
-    early_stop_patience: int = 6   # early stop on val AUC during stage 2
+    early_stop_patience: int = 6   # early stop when val checkpoint metric plateaus (stage 2)
+    # Metric for best checkpoint + early stopping in stage 2 (finetune):
+    #   "composite"    — 0.5·val_AUC + 0.25·val_sens + 0.25·val_spec  (threshold 0.5)
+    #   "auc"          — val ROC-AUC only
+    #   "sensitivity"  — val sensitivity at threshold 0.5 (maximise recall of positives)
+    checkpoint_metric: str = "composite"
+    # BCE positive-class weight: 0 = disabled.
+    # If > 0: pos_weight = scale * (n_neg / n_pos) on the *training* split (computed once).
+    #   scale=1.0 balances errors by inverse frequency; 0.5 is a gentler boost (often safer).
+    bce_pos_weight_scale: float = 0.0
     # How many backbone blocks to keep frozen in stage 2 (0 = unfreeze all):
     #   DenseNet-121 : 0–4   dense block groups
     #   RAD-DINO ViT : 0–12  transformer blocks  (recommended: 8)

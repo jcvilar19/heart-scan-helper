@@ -57,6 +57,34 @@ def mixup_data(
 # ---------------------------------------------------------------------------
 # Differentiable composite loss
 # ---------------------------------------------------------------------------
+def infer_bce_pos_weight_tensor(
+    train_loader: DataLoader,
+    scale: float,
+    device: str,
+) -> Optional[torch.Tensor]:
+    """Return ``pos_weight`` for ``BCEWithLogitsLoss``, or ``None`` if disabled.
+
+    Uses the training split label counts: ``pos_weight = min(100, scale * n_neg / n_pos)``.
+    Reads ``.df['label']`` from ``ChestXrayDataset`` or ``.labels`` from ``EmbeddingDataset``.
+    """
+    if scale <= 0:
+        return None
+    ds = train_loader.dataset
+    if hasattr(ds, "df"):
+        y = ds.df["label"].to_numpy(dtype=np.float64)
+    elif hasattr(ds, "labels"):
+        y = ds.labels.detach().cpu().numpy()
+    else:
+        return None
+    n_pos = int(np.sum(y >= 0.5))
+    n_neg = int(len(y) - n_pos)
+    if n_pos <= 0 or n_neg <= 0:
+        return None
+    w = float(scale) * (n_neg / n_pos)
+    w = min(w, 100.0)
+    return torch.tensor([w], device=device, dtype=torch.float32)
+
+
 class SoftCompositeLoss(nn.Module):
     """Differentiable approximation of composite = 0.5·AUC + 0.25·sens + 0.25·spec.
 
@@ -80,12 +108,18 @@ class SoftCompositeLoss(nn.Module):
         eps:       Numerical stability floor.
     """
 
-    def __init__(self, alpha: float = 0.5, auc_gamma: float = 1.0, eps: float = 1e-7):
+    def __init__(
+        self,
+        alpha: float = 0.5,
+        auc_gamma: float = 1.0,
+        eps: float = 1e-7,
+        pos_weight: Optional[torch.Tensor] = None,
+    ):
         super().__init__()
         self.alpha     = alpha
         self.auc_gamma = auc_gamma
         self.eps       = eps
-        self._bce      = nn.BCEWithLogitsLoss()
+        self._bce      = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
     def forward(self, logit: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         bce_loss = self._bce(logit, target)
@@ -346,7 +380,10 @@ def train_one_seed(
 ) -> Tuple[nn.Module, float, str, list[dict]]:
     """Train ONE model end-to-end (frozen warmup → full fine-tune).
 
-    Returns (best_model, best_val_auc, checkpoint_path, history).
+    Returns (best_model, best_val_score, checkpoint_path, history).
+
+    ``best_val_score`` is the best validation value of ``cfg.checkpoint_metric``
+    (``"composite"``, ``"auc"``, or ``"sensitivity"``) during stage 2.
     """
     cfg = config or CFG
     output_dir = output_dir or cfg.output_dir
@@ -364,17 +401,23 @@ def train_one_seed(
     print(f"  Device  : {cfg.device}")
     print("=" * 80)
 
+    _pw_scale = getattr(cfg, "bce_pos_weight_scale", 0.0)
+    _pos_w    = infer_bce_pos_weight_tensor(train_loader, _pw_scale, cfg.device)
+    if _pos_w is not None:
+        print(f"  BCE pos_weight: {_pos_w.item():.4f}  (scale={_pw_scale} × n_neg/n_pos on train split)")
+
     if cfg.use_composite_loss:
         criterion = SoftCompositeLoss(
             alpha=cfg.composite_loss_alpha,
             auc_gamma=cfg.composite_loss_gamma,
+            pos_weight=_pos_w,
         )
         print(
             f"  Loss    : SoftCompositeLoss  "
             f"(α={cfg.composite_loss_alpha}, γ={cfg.composite_loss_gamma})"
         )
     else:
-        criterion = nn.BCEWithLogitsLoss()
+        criterion = nn.BCEWithLogitsLoss(pos_weight=_pos_w)
         print("  Loss    : BCEWithLogitsLoss")
 
     mixup_alpha     = getattr(cfg, "mixup_alpha",     0.0)
@@ -465,7 +508,18 @@ def train_one_seed(
         opt_ft, T_max=cfg.finetune_epochs, eta_min=cfg.backbone_lr * 0.01,
     )
 
-    best_auc, best_state, patience_ctr = -1.0, None, 0
+    checkpoint_metric = getattr(cfg, "checkpoint_metric", "composite")
+    if checkpoint_metric not in ("auc", "composite", "sensitivity"):
+        checkpoint_metric = "composite"
+    _metric_val_key = "sens" if checkpoint_metric == "sensitivity" else checkpoint_metric
+
+    def _score(vdict: dict) -> float:
+        x = vdict.get(_metric_val_key, float("-inf"))
+        if x is None or (isinstance(x, float) and x != x):  # NaN
+            return float("-inf")
+        return float(x)
+
+    best_score, best_state, patience_ctr = float("-inf"), None, 0
     for ep in range(1, cfg.finetune_epochs + 1):
         t = run_one_epoch(model, train_loader, criterion, opt_ft, scaler, **_aug_kw)
         v = run_one_epoch(model, val_loader, criterion)
@@ -487,14 +541,18 @@ def train_one_seed(
             f"lr={opt_ft.param_groups[0]['lr']:.2e}"
         )
 
-        if v["auc"] > best_auc:
-            best_auc, best_state, patience_ctr = (
-                v["auc"], copy.deepcopy(model.state_dict()), 0
+        cur = _score(v)
+        if cur > best_score:
+            best_score, best_state, patience_ctr = (
+                cur, copy.deepcopy(model.state_dict()), 0
             )
         else:
             patience_ctr += 1
             if patience_ctr >= cfg.early_stop_patience:
-                print(f"  [ft]     early stop at epoch {ep} (best val AUC = {best_auc:.4f})")
+                print(
+                    f"  [ft]     early stop at epoch {ep} "
+                    f"(best val {checkpoint_metric} = {best_score:.4f})"
+                )
                 break
 
     if best_state is not None:
@@ -502,9 +560,11 @@ def train_one_seed(
 
     ckpt_path = os.path.join(output_dir, f"model_seed{seed}.pth")
     torch.save(best_state if best_state is not None else model.state_dict(), ckpt_path)
-    print(f"[seed={seed}] Best val AUC = {best_auc:.4f}   checkpoint → {ckpt_path}")
+    print(
+        f"[seed={seed}] Best val {checkpoint_metric} = {best_score:.4f}   checkpoint → {ckpt_path}"
+    )
 
-    return model, best_auc, ckpt_path, history
+    return model, best_score, ckpt_path, history
 
 
 # ---------------------------------------------------------------------------
@@ -519,7 +579,10 @@ def train_ensemble(
 ) -> Tuple[List[Tuple[int, nn.Module, float, str]], pd.DataFrame]:
     """Train one model per seed and return (models_list, full_history_df).
 
-    `models_list` items: (seed, trained_model, best_val_auc, checkpoint_path).
+    `models_list` items: (seed, trained_model, best_val_score, checkpoint_path).
+
+    ``best_val_score`` is the best validation ``cfg.checkpoint_metric`` value
+    from stage 2 (default: composite).
     """
     cfg = config or CFG
     seeds = seeds if seeds is not None else cfg.seeds
@@ -529,11 +592,11 @@ def train_ensemble(
 
     models, all_history = [], []
     for seed in seeds:
-        m, auc, ckpt, hist = train_one_seed(
+        m, best_score, ckpt, hist = train_one_seed(
             seed, train_loader, val_loader,
             output_dir=output_dir, config=cfg,
         )
-        models.append((seed, m, auc, ckpt))
+        models.append((seed, m, best_score, ckpt))
         all_history.extend(hist)
         free_device_cache(cfg.device)
 
@@ -542,17 +605,20 @@ def train_ensemble(
 
     frozen_blocks = getattr(cfg, "frozen_blocks", 0)
     stage2_label  = "all blocks unfrozen" if frozen_blocks == 0 else f"{frozen_blocks} block(s) frozen"
+    _mk = getattr(cfg, "checkpoint_metric", "composite")
+    if _mk not in ("auc", "composite", "sensitivity"):
+        _mk = "composite"
 
     print("\n" + "═" * 80)
     print(f"  ENSEMBLE COMPLETE")
     print(f"  Backbone      : {cfg.backbone}")
     print(f"  Frozen blocks : {frozen_blocks}  ({stage2_label} in Stage 2)")
     print(f"  Seeds trained : {len(models)}")
-    print("  Per-seed best val AUC:")
-    for seed, _, auc, _ in models:
-        print(f"    seed {seed:>5} : {auc:.4f}")
+    print(f"  Per-seed best val {_mk}:")
+    for seed, _, score, _ in models:
+        print(f"    seed {seed:>5} : {score:.4f}")
     best_seed = max(models, key=lambda x: x[2])
-    print(f"  Best seed     : {best_seed[0]}  (AUC={best_seed[2]:.4f})")
+    print(f"  Best seed     : {best_seed[0]}  ({_mk}={best_seed[2]:.4f})")
     print("═" * 80)
 
     return models, history_df
@@ -578,14 +644,14 @@ def train(
     if cfg.use_ensemble:
         return train_ensemble(train_loader, val_loader, output_dir=output_dir, config=cfg)
 
-    m, auc, ckpt, hist = train_one_seed(
+    m, best_score, ckpt, hist = train_one_seed(
         cfg.seed, train_loader, val_loader, output_dir=output_dir, config=cfg,
     )
     history_df = pd.DataFrame(hist)
     history_df.to_csv(
         os.path.join(output_dir or cfg.output_dir, "training_history.csv"), index=False,
     )
-    return [(cfg.seed, m, auc, ckpt)], history_df
+    return [(cfg.seed, m, best_score, ckpt)], history_df
 
 
 # ---------------------------------------------------------------------------
@@ -830,9 +896,17 @@ def save_results(
         }).to_csv(os.path.join(output_dir, f"{split_name}_predictions.csv"), index=False)
 
     # ── Ensemble manifest (which seeds + which checkpoints) ──────────────
+    _mk = getattr(cfg, "checkpoint_metric", "composite")
+    if _mk not in ("auc", "composite", "sensitivity"):
+        _mk = "composite"
     pd.DataFrame([
-        {"seed": s, "best_val_auc": auc, "checkpoint": ckpt}
-        for (s, _, auc, ckpt) in models_list
+        {
+            "seed": s,
+            "checkpoint_metric": _mk,
+            "best_val_score": score,
+            "checkpoint": ckpt,
+        }
+        for (s, _, score, ckpt) in models_list
     ]).to_csv(os.path.join(output_dir, "ensemble_manifest.csv"), index=False)
 
     print(f"Results saved → {output_dir}")
