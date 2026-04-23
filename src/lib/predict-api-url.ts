@@ -12,7 +12,7 @@
  * URLs to the page hostname so the API reaches the machine running uvicorn.
  */
 /** Demo inference API when no env is set in a production bundle. */
-const DEFAULT_PREDICT_API_URL = "https://jcvilar-cardio-scan-api.hf.space";
+const DEFAULT_PREDICT_API_URL = "https://jcvilar-day4model.hf.space";
 
 const DEV_LOCAL_PREDICT_API_URL = "http://127.0.0.1:8000";
 
