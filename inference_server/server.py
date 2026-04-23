@@ -464,6 +464,7 @@ async def predict(image: UploadFile = File(...)) -> dict:
         "threshold": DECISION_THRESHOLD,
         "ensemble_size": len(_ensemble),
         "use_tta": USE_TTA,
+        "checkpoints": _loaded_checkpoints,
     }
 
 

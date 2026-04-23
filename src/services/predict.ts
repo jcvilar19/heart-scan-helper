@@ -32,5 +32,8 @@ export async function requestPrediction(file: File): Promise<PredictApiResponse>
     timeout: 60000,
   });
   console.info("[predict] response:", data);
+  if (data.checkpoints?.length) {
+    console.log("[predict] ensemble checkpoints (.pth):", data.checkpoints);
+  }
   return data;
 }

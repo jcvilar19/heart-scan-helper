@@ -6,4 +6,6 @@ export type PredictApiResponse = {
   threshold?: number;
   ensemble_size?: number;
   use_tta?: boolean;
+  /** Checkpoint filenames loaded on the inference server (e.g. model_seed8.pth). */
+  checkpoints?: string[];
 };
