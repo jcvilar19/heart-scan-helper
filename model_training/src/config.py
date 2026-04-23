@@ -32,6 +32,10 @@ class Config:
     frozen_epochs:   int = 3       # stage 1: head-only warmup
     finetune_epochs: int = 22      # stage 2: full unfreeze with cosine LR
     early_stop_patience: int = 6   # early stop on val AUC during stage 2
+    # How many backbone blocks to keep frozen in stage 2 (0 = unfreeze all):
+    #   DenseNet-121 : 0–4   dense block groups
+    #   RAD-DINO ViT : 0–12  transformer blocks  (recommended: 8)
+    frozen_blocks: int = 0
 
     # ── Optimiser ────────────────────────────────────────────────────────
     head_lr:      float = 3e-4     # classifier LR (both stages)

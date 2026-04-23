@@ -40,19 +40,48 @@ def imagenet_normalize_np(pil_img: Image.Image) -> torch.Tensor:
     return torch.from_numpy(arr).float()
 
 
+# Module-level cache — processor is loaded once and reused across all calls.
+_RAD_DINO_PROCESSOR = None
+
+
+def _get_rad_dino_processor():
+    global _RAD_DINO_PROCESSOR
+    if _RAD_DINO_PROCESSOR is None:
+        from transformers import AutoImageProcessor
+        _RAD_DINO_PROCESSOR = AutoImageProcessor.from_pretrained("microsoft/rad-dino")
+    return _RAD_DINO_PROCESSOR
+
+
+def rad_dino_normalize(pil_img: Image.Image) -> torch.Tensor:
+    """PIL image → (3, H, W) tensor using RAD-DINO's official AutoImageProcessor.
+
+    Applies the exact same MIMIC-CXR normalization stats used during rad-dino
+    pretraining (mean/std provided by the HuggingFace processor config).
+    Grayscale images are converted to RGB by replicating the single channel
+    before passing to the processor.
+    """
+    if pil_img.mode != "RGB":
+        pil_img = pil_img.convert("RGB")
+    proc = _get_rad_dino_processor()
+    out  = proc(images=pil_img, return_tensors="pt")
+    return out["pixel_values"][0]   # (3, H, W)
+
+
 def get_normalize_fn(backbone: str):
     """Return the correct normalization callable for the given backbone name.
 
     "densenet121" / "densenet121-res224-all"
-        → xrv_normalize_np  (grayscale, [-1024, 1024])
+        → xrv_normalize_np      (1-ch grayscale, [-1024, 1024])
     "rad-dino"
-        → imagenet_normalize_np  (3-ch RGB replicated, ImageNet stats)
+        → rad_dino_normalize    (3-ch RGB via AutoImageProcessor, MIMIC-CXR stats)
           RAD-DINO is a ViT-B/14; feed at 518×518 for best accuracy.
     all other torchvision backbones
-        → imagenet_normalize_np
+        → imagenet_normalize_np (3-ch RGB replicated, ImageNet stats)
     """
     if backbone in ("densenet121", "densenet121-res224-all"):
         return xrv_normalize_np
+    if backbone == "rad-dino":
+        return rad_dino_normalize
     return imagenet_normalize_np
 
 

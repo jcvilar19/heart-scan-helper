@@ -20,29 +20,47 @@ class RadDinoWrapper(nn.Module):
     Architecture
     ────────────
     .features   — the full Dinov2Model (embeddings + 12 transformer blocks + layernorm)
-    .classifier — nn.Linear(hidden_size=768, out_features=1)
+    .classifier — MLP head: Linear(768→256) → GELU → Dropout(0.3) → Linear(256→1)
 
     Forward pass
     ────────────
-    x : (B, 3, H, W) float tensor — ImageNet-normalised, any multiple of 14 px.
+    x : (B, 3, H, W) MIMIC-CXR-normalised tensor, any multiple of 14 px.
         Recommended resolution: 518 × 518 (native: 37 × 37 patches at 14 px).
-    Returns (B,) logit tensor.
+    Returns (B, 1) logit tensor; ``cardio_logit`` squeezes to (B,).
 
     Freeze / unfreeze
     ─────────────────
-    freeze_backbone()    → freezes .features (all 12 blocks + embeddings)
+    freeze_backbone()    → freezes .features; sets _backbone_frozen=True so
+                           .train() keeps the backbone in eval() mode.
     partial_unfreeze(N)  → unfreeze last (12 − N) blocks + layernorm;
-                          keep embeddings + first N blocks frozen.
+                           embeddings + first N blocks stay frozen.
     """
 
     def __init__(self) -> None:
         super().__init__()
         from transformers import AutoModel  # lazy — only loaded when this backbone is used
         dinov2 = AutoModel.from_pretrained("microsoft/rad-dino")
-        self.features   = dinov2
-        self.classifier = nn.Linear(dinov2.config.hidden_size, 1)
-        nn.init.trunc_normal_(self.classifier.weight, std=0.02)
-        nn.init.zeros_(self.classifier.bias)
+        self.features = dinov2
+        hidden = dinov2.config.hidden_size  # 768 for ViT-B
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden, 256),
+            nn.GELU(),
+            nn.Dropout(0.3),
+            nn.Linear(256, 1),
+        )
+        for m in self.classifier.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.trunc_normal_(m.weight, std=0.02)
+                nn.init.zeros_(m.bias)
+        self._backbone_frozen: bool = False
+
+    def train(self, mode: bool = True) -> "RadDinoWrapper":
+        super().train(mode)
+        # While the backbone is frozen keep it in eval() so its internal
+        # Dropout / LayerScale layers don't change during head warmup.
+        if mode and self._backbone_frozen:
+            self.features.eval()
+        return self
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         out = self.features(pixel_values=x)   # Dinov2ModelOutput
@@ -128,6 +146,9 @@ def freeze_backbone(model: nn.Module) -> nn.Module:
         p.requires_grad = False
     for p in model.classifier.parameters():
         p.requires_grad = True
+    if isinstance(model, RadDinoWrapper):
+        model._backbone_frozen = True
+        model.features.eval()   # prevent LayerScale/Dropout updates while frozen
     return model
 
 
@@ -191,6 +212,8 @@ def partial_unfreeze(model: nn.Module, frozen_blocks: int = 0) -> nn.Module:
         for block in encoder_layers[:frozen_blocks]:
             for p in block.parameters():
                 p.requires_grad = False
+        # Some blocks are now trainable — allow backbone to go back into train()
+        model._backbone_frozen = False
 
     else:
         for module in list(model.features.children())[:frozen_blocks]:

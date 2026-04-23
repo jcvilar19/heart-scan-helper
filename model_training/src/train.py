@@ -16,6 +16,7 @@ from torch.utils.data import DataLoader
 from src.config import CFG
 from src.dataset import ChestXrayDataset, SubmissionDataset, TTADataset
 from src.model import (
+    RadDinoWrapper,
     build_model,
     cardio_logit,
     freeze_backbone,
@@ -116,6 +117,127 @@ class SoftCompositeLoss(nn.Module):
         composite_loss  = 1.0 - soft_composite
 
         return self.alpha * bce_loss + (1.0 - self.alpha) * composite_loss
+
+
+# ---------------------------------------------------------------------------
+# RAD-DINO Stage-1 helpers: embedding cache + head-only epoch runner
+# ---------------------------------------------------------------------------
+class EmbeddingDataset(torch.utils.data.Dataset):
+    """Wraps pre-computed CLS embeddings for head-only Stage-1 training.
+
+    Produced by ``precompute_cls_embeddings``; items are
+    ``(embedding_tensor, label_tensor, filename_str)``.
+    """
+
+    def __init__(
+        self,
+        embeds: torch.Tensor,
+        labels: torch.Tensor,
+        names: list,
+    ) -> None:
+        self.embeds = embeds
+        self.labels = labels
+        self.names  = names
+
+    def __len__(self) -> int:
+        return len(self.labels)
+
+    def __getitem__(self, idx: int):
+        return self.embeds[idx], self.labels[idx], self.names[idx]
+
+
+def precompute_cls_embeddings(
+    model: RadDinoWrapper,
+    loader: DataLoader,
+    config=None,
+) -> Tuple[torch.Tensor, torch.Tensor, list]:
+    """Run the frozen RAD-DINO backbone over *loader* once and cache CLS tokens.
+
+    Returns CPU tensors ``(embeddings, labels, names)`` ready to wrap in an
+    ``EmbeddingDataset``.  The backbone is never updated here — this is purely
+    a one-time inference pass for Stage-1 speedup (~10× faster than re-running
+    the ViT every epoch).
+    """
+    cfg = config or CFG
+    pin = (cfg.device == "cuda")
+    model.eval()
+    all_embeds, all_labels, all_names = [], [], []
+    with torch.no_grad():
+        for x, y, names in loader:
+            x   = x.to(cfg.device, non_blocking=pin)
+            out = model.features(pixel_values=x)
+            cls = out.last_hidden_state[:, 0].float().cpu()  # (B, 768)
+            all_embeds.append(cls)
+            all_labels.append(y.float())
+            all_names.extend(list(names))
+    return torch.cat(all_embeds), torch.cat(all_labels), all_names
+
+
+def _run_epoch_head_only(
+    model: nn.Module,
+    loader: DataLoader,
+    criterion: Optional[nn.Module] = None,
+    optimizer: Optional[optim.Optimizer] = None,
+    label_smoothing: float = 0.0,
+) -> dict:
+    """Train / evaluate the classifier head on pre-computed CLS embeddings.
+
+    Inputs are ``(embedding, label, name)`` batches from ``EmbeddingDataset``.
+    No AMP or mixup — the bottleneck is the tiny MLP, not image tensors.
+    Returns the same metric dict as ``run_one_epoch``.
+    """
+    is_train = optimizer is not None
+    model.train(is_train)
+
+    losses, logits_all, labels_all, names_all = [], [], [], []
+    device = next(model.classifier.parameters()).device
+
+    for embeds, y, names in loader:
+        embeds = embeds.to(device)
+        y      = y.to(device)
+        y_hard = y.detach().clone()
+
+        if is_train and label_smoothing > 0.0:
+            y = y * (1.0 - label_smoothing) + 0.5 * label_smoothing
+
+        with torch.set_grad_enabled(is_train):
+            logit = model.classifier(embeds).squeeze(1)   # (B,)
+            loss  = criterion(logit, y) if criterion is not None else None
+
+        if is_train and loss is not None:
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            optimizer.step()
+
+        if loss is not None:
+            losses.append(loss.item())
+        logits_all.append(logit.detach().float().cpu().numpy())
+        labels_all.append(y_hard.float().cpu().numpy())
+        names_all.extend(list(names))
+
+    y_true  = np.concatenate(labels_all)
+    y_logit = np.concatenate(logits_all)
+    y_prob  = 1.0 / (1.0 + np.exp(-y_logit))
+    auc     = roc_auc_score(y_true, y_prob) if len(np.unique(y_true)) > 1 else float("nan")
+
+    y_pred = (y_prob >= 0.5).astype(int)
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
+    acc  = float((tp + tn) / (tp + tn + fp + fn)) if (tp + tn + fp + fn) > 0 else float("nan")
+    sens = float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
+    spec = float(tn / (tn + fp)) if (tn + fp) > 0 else 0.0
+    composite = 0.5 * (auc if not np.isnan(auc) else 0.0) + 0.25 * sens + 0.25 * spec
+
+    return {
+        "loss":      float(np.mean(losses)) if losses else float("nan"),
+        "auc":       float(auc),
+        "acc":       acc,
+        "sens":      sens,
+        "spec":      spec,
+        "composite": float(composite),
+        "y_true":    y_true,
+        "y_prob":    y_prob,
+        "names":     names_all,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -271,12 +393,41 @@ def train_one_seed(
     freeze_backbone(model)
     n_trainable = sum(p.numel() for p in trainable_params(model))
     print(f"\n  Stage 1 — all backbone blocks FROZEN  |  {n_trainable:,} trainable params")
+
+    # RAD-DINO: pre-compute CLS embeddings once → Stage 1 trains only the
+    # 256-unit MLP head, skipping the frozen ViT forward on every batch (~10× faster).
+    _rad_dino_mode = isinstance(model, RadDinoWrapper)
+    if _rad_dino_mode:
+        print("  [rad-dino] Pre-computing CLS embeddings for Stage 1 ...")
+        import time as _time
+        _t0 = _time.time()
+        _t_embeds, _t_labels, _t_names = precompute_cls_embeddings(model, train_loader, cfg)
+        _v_embeds, _v_labels, _v_names = precompute_cls_embeddings(model, val_loader, cfg)
+        print(f"  [rad-dino] Embeddings ready  ({_time.time() - _t0:.1f}s)  "
+              f"train={len(_t_labels)}  val={len(_v_labels)}")
+        s1_train = DataLoader(
+            EmbeddingDataset(_t_embeds, _t_labels, _t_names),
+            batch_size=256, shuffle=True, num_workers=0,
+        )
+        s1_val = DataLoader(
+            EmbeddingDataset(_v_embeds, _v_labels, _v_names),
+            batch_size=256, shuffle=False, num_workers=0,
+        )
+    else:
+        s1_train, s1_val = train_loader, val_loader
+
     opt_frozen = optim.AdamW(
         trainable_params(model), lr=cfg.head_lr, weight_decay=cfg.weight_decay,
     )
     for ep in range(1, cfg.frozen_epochs + 1):
-        t = run_one_epoch(model, train_loader, criterion, opt_frozen, scaler, **_aug_kw)
-        v = run_one_epoch(model, val_loader, criterion)
+        if _rad_dino_mode:
+            t = _run_epoch_head_only(model, s1_train, criterion, opt_frozen,
+                                     label_smoothing=label_smoothing)
+            v = _run_epoch_head_only(model, s1_val, criterion,
+                                     label_smoothing=label_smoothing)
+        else:
+            t = run_one_epoch(model, s1_train, criterion, opt_frozen, scaler, **_aug_kw)
+            v = run_one_epoch(model, s1_val, criterion)
         history.append({
             "seed": seed, "stage": "frozen", "epoch": ep,
             "train_loss": t["loss"], "train_auc": t["auc"],
