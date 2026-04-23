@@ -173,9 +173,23 @@ function HistoryPage() {
               <Link to="/">Run a scan</Link>
             </Button>
           </div>
+        ) : filteredRows.length === 0 ? (
+          <div
+            className="flex flex-col items-center rounded-2xl border border-dashed border-border bg-card px-6 py-16 text-center"
+            style={{ boxShadow: "var(--shadow-card)" }}
+          >
+            <Search className="mb-3 h-8 w-8 text-muted-foreground" />
+            <p className="text-sm font-medium">No matches</p>
+            <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+              No saved scans match “{query}”. Try a different name or patient ID.
+            </p>
+            <Button variant="outline" size="sm" className="mt-5" onClick={() => setQuery("")}>
+              Clear search
+            </Button>
+          </div>
         ) : (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {rows.map((r) => {
+            {filteredRows.map((r) => {
               const positive = r.prediction === 1;
               return (
                 <article
