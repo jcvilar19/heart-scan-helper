@@ -313,7 +313,7 @@ def _load_ensemble() -> List[nn.Module]:
 
     models: list[nn.Module] = []
     for ckpt_path in checkpoint_paths:
-        log.info("  → loading %s", ckpt_path.name)
+        log.info("  → loading %s (%s)", ckpt_path.name, ckpt_path.resolve())
         model = build_model(BACKBONE)
         state = torch.load(ckpt_path, map_location=DEVICE)
         if isinstance(state, dict) and "state_dict" in state:
