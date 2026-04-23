@@ -128,20 +128,6 @@ function HistoryPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleAiSummary}
-              disabled={aiLoading || rows.length === 0}
-              className="gap-1.5"
-            >
-              {aiLoading ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Sparkles className="h-3.5 w-3.5" />
-              )}
-              {aiLoading ? "Analyzing…" : "AI summary"}
-            </Button>
             <Button asChild variant="outline" size="sm">
               <Link to="/">New scan</Link>
             </Button>
@@ -174,51 +160,6 @@ function HistoryPage() {
               {filteredRows.length} of {rows.length}
             </span>
           </div>
-        )}
-
-        {(aiLoading || aiSummary || aiError) && (
-          <section
-            className="mb-6 rounded-2xl border border-border bg-card p-5"
-            style={{ boxShadow: "var(--shadow-card)" }}
-            aria-live="polite"
-          >
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <span
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-full"
-                  style={{ background: "var(--gradient-primary)", color: "var(--primary-foreground)" }}
-                >
-                  <Sparkles className="h-3.5 w-3.5" />
-                </span>
-                <h2 className="text-sm font-semibold">AI summary &amp; suggestions</h2>
-              </div>
-              {(aiSummary || aiError) && !aiLoading && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAiSummary(null);
-                    setAiError(null);
-                  }}
-                  className="rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-                  aria-label="Dismiss summary"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              )}
-            </div>
-            {aiLoading ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Reviewing your recent scans…
-              </div>
-            ) : aiError ? (
-              <p className="text-sm text-destructive">{aiError}</p>
-            ) : aiSummary ? (
-              <div className="space-y-2 text-sm leading-relaxed">
-                <ReactMarkdown components={markdownComponents}>{aiSummary}</ReactMarkdown>
-              </div>
-            ) : null}
-          </section>
         )}
 
         {loading ? (
