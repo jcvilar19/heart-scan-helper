@@ -59,7 +59,7 @@ function LandingPage() {
           <div>
             <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground">
               <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
-              AI-assisted screening · Research preview
+              ML-assisted screening · Research preview
             </div>
             <h1 className="text-balance text-4xl font-bold tracking-tight sm:text-5xl lg:text-6xl">
               Detect{" "}
@@ -67,14 +67,14 @@ function LandingPage() {
                 className="bg-clip-text text-transparent"
                 style={{ backgroundImage: "var(--gradient-primary)" }}
               >
-                cardiomegaly
+                Cardiomegaly
               </span>{" "}
-              from chest X-rays in seconds
+              <br className="hidden sm:inline" />
+              from X-Rays in seconds
             </h1>
             <p className="mt-5 max-w-xl text-pretty text-base text-muted-foreground sm:text-lg">
-              Coraçai analyzes chest radiographs with a deep neural network trained on
-              thousands of labelled images. Get a probability score and binary verdict the moment
-              you upload.
+              Coraçai analyzes chest radiography with a ML model trained on thousands of
+              labelled images. Get a probability score and binary verdict the moment you upload.
             </p>
 
             <div className="mt-8 flex flex-wrap items-center gap-3">
@@ -160,13 +160,13 @@ function LandingPage() {
               n={2}
               icon={<LineChart className="h-5 w-5" />}
               title="AI inference"
-              body="Our neural network returns a calibrated probability score for each image."
+              body="Our model returns a calibrated probability score for each image."
             />
             <Step
               n={3}
               icon={<Stethoscope className="h-5 w-5" />}
               title="Review & save"
-              body="Add notes, save to your private history, and revisit any time."
+              body="Add notes, get a summary, save to your private history, and revisit any time."
             />
           </ol>
         </div>
