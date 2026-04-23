@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ScanAiInsight } from "@/components/scan-ai-insight";
 import { useAuth } from "@/hooks/use-auth";
 
 export type AnalysisStatus = "pending" | "validating" | "analyzing" | "done" | "error";
@@ -388,6 +389,17 @@ function ResultState({
           />
         </div>
       )}
+      <ScanAiInsight
+        scan={{
+          patient_name: item.patientName || null,
+          patient_id: item.patientId || null,
+          image_name: item.file.name,
+          probability: item.result.probability,
+          prediction: item.result.prediction,
+          pathology: "cardiomegaly",
+          notes: item.notes || null,
+        }}
+      />
       <NotesBlock {...sharedNotesProps} />
       {dialog}
     </div>

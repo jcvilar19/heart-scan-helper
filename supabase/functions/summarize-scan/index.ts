@@ -1,6 +1,6 @@
-// Lovable AI–powered summary of a user's classification history.
-// Receives a compact summary of recent scans and asks the model to
-// produce a concise clinical-style summary + suggestions for improvement.
+// Per-scan AI insight: takes a single classification result and returns a
+// short clinical-style summary + suggestions. Used on both the scanner page
+// (live results) and the history page (saved scans).
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
@@ -27,9 +27,9 @@ serve(async (req) => {
   }
 
   try {
-    const { scans } = (await req.json()) as { scans: ScanInput[] };
-    if (!Array.isArray(scans) || scans.length === 0) {
-      return new Response(JSON.stringify({ error: "No scans provided." }), {
+    const { scan } = (await req.json()) as { scan: ScanInput };
+    if (!scan || typeof scan.probability !== "number") {
+      return new Response(JSON.stringify({ error: "Missing or invalid scan." }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -43,46 +43,34 @@ serve(async (req) => {
       });
     }
 
-    // Compact, model-friendly representation of each scan.
-    const lines = scans.slice(0, 100).map((s, i) => {
-      const verdict = s.prediction === 1 ? "POSITIVE" : "negative";
-      const prob = (s.probability * 100).toFixed(1);
-      const date = s.created_at ? new Date(s.created_at).toISOString().slice(0, 10) : "—";
-      const who =
-        [s.patient_name, s.patient_id ? `#${s.patient_id}` : null].filter(Boolean).join(" ") ||
-        s.image_name ||
-        "unknown";
-      const notes = s.notes ? ` notes: ${s.notes.slice(0, 200)}` : "";
-      return `${i + 1}. ${date} | ${who} | ${verdict} (${prob}%)${notes}`;
-    });
-
-    const total = scans.length;
-    const positive = scans.filter((s) => s.prediction === 1).length;
-    const avgProb =
-      scans.reduce((acc, s) => acc + (s.probability ?? 0), 0) / Math.max(1, total);
+    const verdict = scan.prediction === 1 ? "POSITIVE indication" : "negative";
+    const probPct = (scan.probability * 100).toFixed(1);
+    const who =
+      [scan.patient_name, scan.patient_id ? `#${scan.patient_id}` : null]
+        .filter(Boolean)
+        .join(" ") ||
+      scan.image_name ||
+      "an unidentified patient";
 
     const systemPrompt =
-      "You are a clinical AI assistant helping a clinician review a batch of cardiomegaly screening results from chest X-rays. " +
-      "Be concise, neutral, and never invent patient information. Always remind the reader this is a screening tool, not a diagnosis.";
+      "You are a clinical AI assistant helping a clinician interpret a single cardiomegaly screening result from a chest X-ray. " +
+      "Be concise, neutral, and never invent patient details that were not provided. Always remind the reader this is a screening tool, not a diagnosis. " +
+      "Respond in markdown, in fewer than 180 words.";
 
     const userPrompt = [
-      `You are reviewing ${total} recent cardiomegaly screening results.`,
-      `- Positive predictions: ${positive} / ${total}`,
-      `- Average probability: ${(avgProb * 100).toFixed(1)}%`,
+      `Scan for ${who}.`,
+      `- Pathology screened: ${scan.pathology ?? "cardiomegaly"}`,
+      `- Model verdict: ${verdict}`,
+      `- Probability: ${probPct}%`,
+      scan.notes ? `- Clinician notes: ${scan.notes.slice(0, 400)}` : null,
       "",
-      "Scans (newest first):",
-      ...lines,
-      "",
-      "Please respond in markdown with these sections:",
-      "## Summary",
-      "A short paragraph summarizing the batch (volume, positive rate, notable cases).",
-      "## Notable cases",
-      "Up to 5 bullets calling out high-probability scans or scans worth a second look. Reference patients by name or ID if available.",
-      "## Suggested next steps",
-      "3-5 actionable bullets for the clinician (e.g. follow-up imaging, prioritization, data-quality issues).",
-      "## Improvements for future scans",
-      "2-4 bullets on how the user could improve dataset quality or workflow (image quality, missing patient info, etc.).",
-    ].join("\n");
+      "Respond with these short sections:",
+      "**Interpretation** — 1-2 sentences on what the result means in plain language.",
+      "**Suggested next steps** — 2-3 bullets the clinician could take (e.g. follow-up imaging, second read).",
+      "**Improvements** — 1-2 bullets on how to improve future scans for this patient (image quality, missing info, etc.).",
+    ]
+      .filter(Boolean)
+      .join("\n");
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -124,16 +112,11 @@ serve(async (req) => {
 
     const data = await response.json();
     const content: string = data?.choices?.[0]?.message?.content ?? "";
-
-    return new Response(
-      JSON.stringify({
-        summary: content,
-        stats: { total, positive, avg_probability: avgProb },
-      }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
+    return new Response(JSON.stringify({ summary: content }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   } catch (e) {
-    console.error("summarize-history error:", e);
+    console.error("summarize-scan error:", e);
     return new Response(
       JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
