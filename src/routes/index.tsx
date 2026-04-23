@@ -70,7 +70,8 @@ function LandingPage() {
                 Cardiomegaly
               </span>{" "}
               <br className="hidden sm:inline" />
-              from X-Rays in seconds
+              from X-Rays <br className="hidden sm:inline" />
+              in seconds.
             </h1>
             <p className="mt-5 max-w-xl text-pretty text-base text-muted-foreground sm:text-lg">
               Coraçai analyzes chest radiography with a ML model trained on thousands of
@@ -91,7 +92,7 @@ function LandingPage() {
 
             <dl className="mt-10 grid max-w-md grid-cols-3 gap-6">
               <Stat label="Inference" value="<2s" />
-              <Stat label="Threshold" value="0.5" />
+              <Stat label="Threshold" value="0.4" />
               <Stat label="Per-user data" value="Private" />
             </dl>
           </div>
@@ -126,7 +127,7 @@ function LandingPage() {
           <FeatureTile
             icon={<Brain className="h-5 w-5" />}
             title="Binary verdict"
-            body="Threshold of 0.5 maps probability to a clear 0/1 prediction."
+            body="Threshold of 0.4 maps probability to a clear 0/1 prediction."
           />
           <FeatureTile
             icon={<ShieldCheck className="h-5 w-5" />}
