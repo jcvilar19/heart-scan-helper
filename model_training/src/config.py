@@ -24,9 +24,10 @@ class Config:
     batch_size:  int = 32
     num_workers: int = 4
 
-    # ── Train / val / test split ─────────────────────────────────────────
+    # ── Train / val / test split (stratified; disjoint image rows) ───────
+    # Larger test_size = more reliable test metrics, less data for training.
     val_size:  float = 0.15
-    test_size: float = 0.15
+    test_size: float = 0.25
 
     # ── Training schedule (two-stage) ────────────────────────────────────
     frozen_epochs:   int = 3       # stage 1: head-only warmup
