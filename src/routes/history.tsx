@@ -1,9 +1,10 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, History as HistoryIcon, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { AlertTriangle, CheckCircle2, History as HistoryIcon, Search, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { AppHeader } from "@/components/app-header";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
@@ -37,6 +38,18 @@ function HistoryPage() {
   const navigate = useNavigate();
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
+
+  const filteredRows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter((r) => {
+      const name = r.patient_name?.toLowerCase() ?? "";
+      const pid = r.patient_id?.toLowerCase() ?? "";
+      const file = r.image_name?.toLowerCase() ?? "";
+      return name.includes(q) || pid.includes(q) || file.includes(q);
+    });
+  }, [rows, query]);
 
   useEffect(() => {
     if (!authLoading && !user) navigate({ to: "/auth" });
@@ -109,6 +122,34 @@ function HistoryPage() {
           </Button>
         </div>
 
+        {!loading && rows.length > 0 && (
+          <div className="mb-6 flex items-center gap-3">
+            <div className="relative max-w-md flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search by patient name, ID or filename"
+                className="pl-9 pr-9"
+                aria-label="Search saved scans"
+              />
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => setQuery("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  aria-label="Clear search"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            <span className="text-xs text-muted-foreground">
+              {filteredRows.length} of {rows.length}
+            </span>
+          </div>
+        )}
+
         {loading ? (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {Array.from({ length: 6 }).map((_, i) => (
@@ -132,9 +173,23 @@ function HistoryPage() {
               <Link to="/">Run a scan</Link>
             </Button>
           </div>
+        ) : filteredRows.length === 0 ? (
+          <div
+            className="flex flex-col items-center rounded-2xl border border-dashed border-border bg-card px-6 py-16 text-center"
+            style={{ boxShadow: "var(--shadow-card)" }}
+          >
+            <Search className="mb-3 h-8 w-8 text-muted-foreground" />
+            <p className="text-sm font-medium">No matches</p>
+            <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+              No saved scans match “{query}”. Try a different name or patient ID.
+            </p>
+            <Button variant="outline" size="sm" className="mt-5" onClick={() => setQuery("")}>
+              Clear search
+            </Button>
+          </div>
         ) : (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {rows.map((r) => {
+            {filteredRows.map((r) => {
               const positive = r.prediction === 1;
               return (
                 <article
