@@ -20,9 +20,6 @@ export type Database = {
           id: string
           image_name: string
           image_path: string
-          notes: string | null
-          patient_id: string | null
-          patient_name: string | null
           pathology: string
           prediction: number
           probability: number
@@ -33,9 +30,6 @@ export type Database = {
           id?: string
           image_name: string
           image_path: string
-          notes?: string | null
-          patient_id?: string | null
-          patient_name?: string | null
           pathology?: string
           prediction: number
           probability: number
@@ -46,9 +40,6 @@ export type Database = {
           id?: string
           image_name?: string
           image_path?: string
-          notes?: string | null
-          patient_id?: string | null
-          patient_name?: string | null
           pathology?: string
           prediction?: number
           probability?: number
