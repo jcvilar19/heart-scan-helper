@@ -1,0 +1,17 @@
+# FastAPI + ASGI server
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9
+
+# ML stack (must match `model_training/requirements.txt` so state-dict loads cleanly)
+torch>=2.1.0
+torchvision>=0.16.0
+numpy>=1.24
+pandas>=2.0
+pillow>=9.0
+
+# `model_training/src/model.py` imports this at module level
+torchxrayvision>=1.2.0
+
+# Needed only if MODEL_BACKBONE=rad-dino; harmless otherwise
+transformers>=4.40.0

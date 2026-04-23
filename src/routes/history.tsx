@@ -25,6 +25,9 @@ type Row = {
   probability: number;
   prediction: number;
   pathology: string;
+  patient_name: string | null;
+  patient_id: string | null;
+  notes: string | null;
   created_at: string;
   signedUrl?: string;
 };
@@ -160,7 +163,21 @@ function HistoryPage() {
                     </button>
                   </div>
                   <div className="space-y-2 p-4">
-                    <p className="truncate text-sm font-medium" title={r.image_name}>
+                    {(r.patient_name || r.patient_id) && (
+                      <div className="space-y-0.5">
+                        {r.patient_name && (
+                          <p className="truncate text-sm font-semibold" title={r.patient_name}>
+                            {r.patient_name}
+                          </p>
+                        )}
+                        {r.patient_id && (
+                          <p className="font-mono text-xs text-muted-foreground">
+                            ID: {r.patient_id}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    <p className="truncate text-xs text-muted-foreground" title={r.image_name}>
                       {r.image_name}
                     </p>
                     <p className="text-xs text-muted-foreground">

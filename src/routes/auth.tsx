@@ -24,12 +24,21 @@ const credentialsSchema = z.object({
   password: z.string().min(6, "At least 6 characters").max(72),
 });
 
+const signupSchema = credentialsSchema.extend({
+  fullName: z
+    .string()
+    .trim()
+    .min(2, "Enter your full name")
+    .max(120, "Name is too long"),
+});
+
 function AuthPage() {
   const navigate = useNavigate();
   const { user, loading } = useAuth();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [fullName, setFullName] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -38,6 +47,34 @@ function AuthPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (mode === "signup") {
+      const parsed = signupSchema.safeParse({ email, password, fullName });
+      if (!parsed.success) {
+        toast.error(parsed.error.issues[0].message);
+        return;
+      }
+      setSubmitting(true);
+      try {
+        const redirectUrl = `${window.location.origin}/`;
+        const { error } = await supabase.auth.signUp({
+          email: parsed.data.email,
+          password: parsed.data.password,
+          options: {
+            emailRedirectTo: redirectUrl,
+            data: { full_name: parsed.data.fullName },
+          },
+        });
+        if (error) throw error;
+        toast.success("Account created. You're signed in.");
+        navigate({ to: "/app" });
+      } catch (err) {
+        toast.error((err as Error).message ?? "Authentication failed.");
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
     const parsed = credentialsSchema.safeParse({ email, password });
     if (!parsed.success) {
       toast.error(parsed.error.issues[0].message);
@@ -45,23 +82,12 @@ function AuthPage() {
     }
     setSubmitting(true);
     try {
-      if (mode === "signup") {
-        const redirectUrl = `${window.location.origin}/`;
-        const { error } = await supabase.auth.signUp({
-          email: parsed.data.email,
-          password: parsed.data.password,
-          options: { emailRedirectTo: redirectUrl },
-        });
-        if (error) throw error;
-        toast.success("Account created. You're signed in.");
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email: parsed.data.email,
-          password: parsed.data.password,
-        });
-        if (error) throw error;
-        toast.success("Welcome back.");
-      }
+      const { error } = await supabase.auth.signInWithPassword({
+        email: parsed.data.email,
+        password: parsed.data.password,
+      });
+      if (error) throw error;
+      toast.success("Welcome back.");
       navigate({ to: "/app" });
     } catch (err) {
       toast.error((err as Error).message ?? "Authentication failed.");
@@ -100,6 +126,23 @@ function AuthPage() {
           </p>
 
           <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+            {mode === "signup" && (
+              <div className="space-y-1.5">
+                <Label htmlFor="full-name">Doctor’s full name</Label>
+                <Input
+                  id="full-name"
+                  type="text"
+                  autoComplete="name"
+                  required
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  placeholder="e.g. Dr. Jane Smith"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Shown on patient reports you generate.
+                </p>
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label htmlFor="email">Email</Label>
               <Input
