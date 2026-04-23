@@ -117,26 +117,6 @@ export function ResultsGallery({
   );
 }
 
-async function imageToDataUrl(src: string): Promise<string> {
-  return await new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        reject(new Error("Could not create canvas context."));
-        return;
-      }
-      ctx.drawImage(img, 0, 0);
-      resolve(canvas.toDataURL("image/jpeg", 0.95));
-    };
-    img.onerror = () => reject(new Error("Could not load image for PDF."));
-    img.src = src;
-  });
-}
-
 function predictionSummary(item: AnalysisItem): string {
   if (item.result) {
     return item.result.label || PATHOLOGY_LABEL;
@@ -150,121 +130,53 @@ function predictionSummary(item: AnalysisItem): string {
   return "Pending";
 }
 
-type ReportPatient = {
-  doctorName: string;
-  patientName: string;
-  patientId: string;
-};
-
-function safeFilenameFragment(input: string, fallback: string): string {
-  const cleaned = input
-    .trim()
-    .replace(/[^\p{L}\p{N}_-]+/gu, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  return cleaned.length > 0 ? cleaned : fallback;
+async function fetchAiSummary(item: AnalysisItem): Promise<string | null> {
+  if (!item.result) return null;
+  try {
+    const { data, error } = await supabase.functions.invoke("summarize-scan", {
+      body: {
+        scan: {
+          patient_name: item.patientName || null,
+          patient_id: item.patientId || null,
+          image_name: item.file.name,
+          probability: item.result.probability,
+          prediction: item.result.prediction,
+          pathology: item.result.label || PATHOLOGY_LABEL,
+          notes: item.notes || null,
+        },
+      },
+    });
+    if (error) throw error;
+    const content = (data as { summary?: string } | null)?.summary;
+    return content ?? null;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Failed to generate AI summary.";
+    toast.error(msg);
+    return null;
+  }
 }
 
-async function downloadPdf(item: AnalysisItem, info: ReportPatient): Promise<void> {
-  const doc = new jsPDF({ unit: "mm", format: "a4" });
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const margin = 14;
-  let y = 18;
+async function downloadPdf(
+  item: AnalysisItem,
+  info: ReportPatient,
+  includeAi: boolean,
+): Promise<void> {
+  if (!item.result) return;
 
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(16);
-  doc.text("Coraçai — Patient Report", margin, y);
-  y += 9;
+  const aiSummary = includeAi ? await fetchAiSummary(item) : null;
 
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(10);
-  doc.setTextColor(120);
-  doc.text(
-    `Generated ${new Date().toLocaleString()}`,
-    pageWidth - margin,
-    y - 5,
-    { align: "right" },
-  );
-  doc.setTextColor(0);
-
-  doc.setDrawColor(220);
-  doc.line(margin, y, pageWidth - margin, y);
-  y += 7;
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(11);
-  doc.text("Patient", margin, y);
-  doc.text("Doctor", pageWidth / 2, y);
-  y += 5;
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(11);
-  doc.text(info.patientName, margin, y);
-  doc.text(info.doctorName || "—", pageWidth / 2, y);
-  y += 5;
-  doc.setFontSize(9);
-  doc.setTextColor(110);
-  doc.text(`Patient ID: ${info.patientId}`, margin, y);
-  doc.setTextColor(0);
-  doc.setFontSize(11);
-  y += 7;
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(12);
-  doc.text("Diagnostic", margin, y);
-  y += 6;
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(11);
-  const verdictLine =
-    item.result?.prediction === 1
-      ? "Potential indication of cardiomegaly."
-      : item.result
-      ? "No clear indication of cardiomegaly."
-      : "No diagnostic available.";
-  doc.text(`Prediction: ${predictionSummary(item)}`, margin, y);
-  y += 6;
-  const confidence = item.result ? `${(item.result.probability * 100).toFixed(1)}%` : "N/A";
-  doc.text(`Confidence: ${confidence}`, margin, y);
-  y += 6;
-  doc.text(`Verdict: ${verdictLine}`, margin, y);
-  y += 9;
-
-  if (item.notes.trim().length > 0) {
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(12);
-    doc.text("Clinical notes", margin, y);
-    y += 6;
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(11);
-    const wrapped = doc.splitTextToSize(item.notes.trim(), pageWidth - margin * 2);
-    doc.text(wrapped, margin, y);
-    y += wrapped.length * 5 + 4;
-  }
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(12);
-  doc.text("Image", margin, y);
-  y += 5;
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  doc.setTextColor(120);
-  doc.text(item.file.name, margin, y);
-  doc.setTextColor(0);
-  y += 4;
-
-  const dataUrl = await imageToDataUrl(item.previewUrl);
-  const maxWidth = pageWidth - margin * 2;
-  const maxHeight = 130;
-  doc.addImage(dataUrl, "JPEG", margin, y, maxWidth, maxHeight, undefined, "FAST");
-  y += maxHeight + 6;
-
-  doc.setFontSize(8);
-  doc.setTextColor(140);
-  doc.text(
-    "This tool does not replace professional medical diagnosis. Interpret with caution and specialist review.",
-    margin,
-    y,
-  );
-  doc.setTextColor(0);
+  const doc = await generateReport({
+    patient: info,
+    scan: {
+      imageName: item.file.name,
+      imageUrl: item.previewUrl,
+      probability: item.result.probability,
+      prediction: item.result.prediction,
+      pathology: item.result.label || PATHOLOGY_LABEL,
+      notes: item.notes,
+    },
+    aiSummary,
+  });
 
   const patientFragment = safeFilenameFragment(info.patientName, "patient");
   const idFragment = safeFilenameFragment(info.patientId, "id");
