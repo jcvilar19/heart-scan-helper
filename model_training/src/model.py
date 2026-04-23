@@ -8,6 +8,49 @@ import torchxrayvision as xrv
 
 
 # ---------------------------------------------------------------------------
+# RAD-DINO wrapper
+# ---------------------------------------------------------------------------
+class RadDinoWrapper(nn.Module):
+    """microsoft/rad-dino — DINOv2 ViT-B/14 pretrained on ~1 M chest X-rays.
+
+    Wraps the HuggingFace model to expose the same ``.features`` / ``.classifier``
+    contract used by every other backbone, so freeze helpers and the two-stage
+    optimiser work without modification.
+
+    Architecture
+    ────────────
+    .features   — the full Dinov2Model (embeddings + 12 transformer blocks + layernorm)
+    .classifier — nn.Linear(hidden_size=768, out_features=1)
+
+    Forward pass
+    ────────────
+    x : (B, 3, H, W) float tensor — ImageNet-normalised, any multiple of 14 px.
+        Recommended resolution: 518 × 518 (native: 37 × 37 patches at 14 px).
+    Returns (B,) logit tensor.
+
+    Freeze / unfreeze
+    ─────────────────
+    freeze_backbone()    → freezes .features (all 12 blocks + embeddings)
+    partial_unfreeze(N)  → unfreeze last (12 − N) blocks + layernorm;
+                          keep embeddings + first N blocks frozen.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        from transformers import AutoModel  # lazy — only loaded when this backbone is used
+        dinov2 = AutoModel.from_pretrained("microsoft/rad-dino")
+        self.features   = dinov2
+        self.classifier = nn.Linear(dinov2.config.hidden_size, 1)
+        nn.init.trunc_normal_(self.classifier.weight, std=0.02)
+        nn.init.zeros_(self.classifier.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out = self.features(pixel_values=x)   # Dinov2ModelOutput
+        cls = out.last_hidden_state[:, 0]     # CLS token  (B, 768)
+        return self.classifier(cls)           # (B, 1)
+
+
+# ---------------------------------------------------------------------------
 # Backbone factory
 # ---------------------------------------------------------------------------
 def build_model(backbone: str | None = None) -> nn.Module:
@@ -16,6 +59,8 @@ def build_model(backbone: str | None = None) -> nn.Module:
     backbone options (also set via CFG.backbone):
         "densenet121"        — torchxrayvision DenseNet-121, pretrained on ~1M chest
                                X-rays; outputs raw Cardiomegaly logit via pathology index.
+        "rad-dino"           — microsoft/rad-dino, DINOv2 ViT-B/14 pretrained on ~1M
+                               chest X-rays (HuggingFace); 518×518 recommended input.
         "mobilenet_v3_large" — torchvision MobileNetV3-Large (ImageNet); final linear
                                replaced with a single-output head.
         "efficientnet_b0"    — torchvision EfficientNet-B0  (ImageNet); same replacement.
@@ -33,6 +78,9 @@ def build_model(backbone: str | None = None) -> nn.Module:
         model.op_threshs = None      # raw logits at every output
         model.apply_sigmoid = False  # belt + suspenders
         return model
+
+    if backbone == "rad-dino":
+        return RadDinoWrapper()
 
     import torchvision.models as tvm
 
@@ -53,7 +101,7 @@ def build_model(backbone: str | None = None) -> nn.Module:
 
     raise ValueError(
         f"Unknown backbone: {backbone!r}. "
-        "Choose from: densenet121, mobilenet_v3_large, efficientnet_b0, efficientnet_b3"
+        "Choose from: densenet121, rad-dino, mobilenet_v3_large, efficientnet_b0, efficientnet_b3"
     )
 
 
@@ -61,8 +109,8 @@ def cardio_logit(model: nn.Module, x: torch.Tensor) -> torch.Tensor:
     """Forward pass returning a (B,) tensor of raw logits for Cardiomegaly.
 
     For torchxrayvision DenseNet the logit is extracted from the pathology head.
-    For torchvision backbones (MobileNet, EfficientNet) the model directly outputs
-    a (B, 1) tensor which is squeezed to (B,).
+    For all other backbones (MobileNet, EfficientNet, RadDinoWrapper) the model
+    outputs (B, 1) which is squeezed to (B,).
     """
     if isinstance(model, xrv.models.DenseNet):
         out = model(x)                                       # (B, num_pathologies)
@@ -104,13 +152,20 @@ def partial_unfreeze(model: nn.Module, frozen_blocks: int = 0) -> nn.Module:
 
     frozen_blocks — how many feature blocks to keep frozen:
         0  → unfreeze everything (same as unfreeze_all)
+
+    DenseNet-121 (4 dense block groups):
         1  → keep denseblock1 (+transition1) frozen
         2  → keep denseblock1–2 frozen
         3  → keep denseblock1–3 frozen
         4  → keep all dense blocks frozen (only classifier trains)
 
-    For torchvision models (MobileNet, EfficientNet) the index refers to the
-    numbered child modules of model.features (typically 16–18 entries).
+    RAD-DINO / ViT-B (12 transformer blocks):
+        1–12 → keep embeddings + first N transformer blocks frozen
+               (last 12−N blocks + layernorm are unfrozen)
+        ≥12  → keep all transformer blocks frozen (only classifier trains)
+
+    torchvision models (MobileNet, EfficientNet):
+        N    → freeze first N indexed children of model.features.
     """
     for p in model.parameters():
         p.requires_grad = True
@@ -126,6 +181,17 @@ def partial_unfreeze(model: nn.Module, frozen_blocks: int = 0) -> nn.Module:
             if name in frozen_names:
                 for p in module.parameters():
                     p.requires_grad = False
+
+    elif isinstance(model, RadDinoWrapper):
+        # Always freeze the patch/position embeddings
+        for p in model.features.embeddings.parameters():
+            p.requires_grad = False
+        # Freeze the first `frozen_blocks` transformer blocks
+        encoder_layers = model.features.encoder.layer
+        for block in encoder_layers[:frozen_blocks]:
+            for p in block.parameters():
+                p.requires_grad = False
+
     else:
         for module in list(model.features.children())[:frozen_blocks]:
             for p in module.parameters():

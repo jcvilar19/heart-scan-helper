@@ -49,11 +49,13 @@ class Config:
     label_smoothing: float = 0.0
 
     # ── Architecture ─────────────────────────────────────────────────────
-    # Options: "densenet121" | "mobilenet_v3_large" | "efficientnet_b0" | "efficientnet_b3"
-    # densenet121       — torchxrayvision DenseNet-121, pretrained on ~1M chest X-rays (recommended)
+    # Options: "densenet121" | "rad-dino" | "mobilenet_v3_large" | "efficientnet_b0" | "efficientnet_b3"
+    # densenet121        — torchxrayvision DenseNet-121, pretrained on ~1M chest X-rays (recommended)
+    # rad-dino           — microsoft/rad-dino, DINOv2 ViT-B/14 pretrained on ~1M chest X-rays;
+    #                      use img_size=518 (native: 37×37 patches at 14 px); 12 frozen_blocks max
     # mobilenet_v3_large — torchvision MobileNetV3-Large, pretrained on ImageNet (faster, lighter)
-    # efficientnet_b0   — torchvision EfficientNet-B0,  pretrained on ImageNet (good accuracy/size trade-off)
-    # efficientnet_b3   — torchvision EfficientNet-B3,  pretrained on ImageNet (higher accuracy, more params)
+    # efficientnet_b0    — torchvision EfficientNet-B0,  pretrained on ImageNet (good accuracy/size trade-off)
+    # efficientnet_b3    — torchvision EfficientNet-B3,  pretrained on ImageNet (higher accuracy, more params)
     backbone: str = "efficientnet_b0"
 
     # ── Ensemble ─────────────────────────────────────────────────────────

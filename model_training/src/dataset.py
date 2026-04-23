@@ -41,8 +41,17 @@ def imagenet_normalize_np(pil_img: Image.Image) -> torch.Tensor:
 
 
 def get_normalize_fn(backbone: str):
-    """Return the correct normalization callable for the given backbone name."""
-    if backbone == "densenet121":
+    """Return the correct normalization callable for the given backbone name.
+
+    "densenet121" / "densenet121-res224-all"
+        → xrv_normalize_np  (grayscale, [-1024, 1024])
+    "rad-dino"
+        → imagenet_normalize_np  (3-ch RGB replicated, ImageNet stats)
+          RAD-DINO is a ViT-B/14; feed at 518×518 for best accuracy.
+    all other torchvision backbones
+        → imagenet_normalize_np
+    """
+    if backbone in ("densenet121", "densenet121-res224-all"):
         return xrv_normalize_np
     return imagenet_normalize_np
 
