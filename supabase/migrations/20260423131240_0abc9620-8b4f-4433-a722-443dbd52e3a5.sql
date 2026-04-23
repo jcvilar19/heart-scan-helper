@@ -1,0 +1,4 @@
+ALTER TABLE public.classifications
+  ADD COLUMN IF NOT EXISTS patient_name TEXT,
+  ADD COLUMN IF NOT EXISTS patient_id TEXT,
+  ADD COLUMN IF NOT EXISTS notes TEXT;
