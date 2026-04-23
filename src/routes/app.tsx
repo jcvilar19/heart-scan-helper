@@ -25,7 +25,7 @@ export const Route = createFileRoute("/app")({
   component: AppPage,
   head: () => ({
     meta: [
-      { title: "Scanner — CardioScan" },
+      { title: "Scanner — Coraçai" },
       {
         name: "description",
         content: "Upload chest X-rays and get an AI cardiomegaly probability score.",
