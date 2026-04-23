@@ -4,7 +4,7 @@ import {
   Brain,
   ShieldCheck,
   Zap,
-  Activity,
+  
   Upload,
   LineChart,
   Stethoscope,
@@ -102,13 +102,6 @@ function LandingPage() {
               style={{ boxShadow: "var(--shadow-elegant)" }}
             >
               <NeuralNetworkAnim />
-              <div className="mt-4 flex items-center justify-between text-xs text-muted-foreground">
-                <span className="inline-flex items-center gap-1.5">
-                  <Activity className="h-3.5 w-3.5 text-primary" />
-                  Live model visualization
-                </span>
-                <span>4 layers · 17 neurons</span>
-              </div>
             </div>
           </div>
         </div>
