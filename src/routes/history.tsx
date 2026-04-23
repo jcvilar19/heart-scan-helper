@@ -13,7 +13,7 @@ export const Route = createFileRoute("/history")({
   component: HistoryPage,
   head: () => ({
     meta: [
-      { title: "History — CardioScan" },
+      { title: "History — Coraçai" },
       { name: "description", content: "Review your saved cardiomegaly classification results." },
     ],
   }),
