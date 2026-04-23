@@ -6,6 +6,7 @@ import { AppHeader } from "@/components/app-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScanAiInsight } from "@/components/scan-ai-insight";
+import { HistoryCardTools } from "@/components/history-card-tools";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
@@ -277,6 +278,14 @@ function HistoryPage() {
                         notes: r.notes,
                         created_at: r.created_at,
                       }}
+                    />
+                    <HistoryCardTools
+                      row={r}
+                      onUpdate={(id, patch) =>
+                        setRows((prev) =>
+                          prev.map((x) => (x.id === id ? { ...x, ...patch } : x)),
+                        )
+                      }
                     />
                   </div>
                 </article>
