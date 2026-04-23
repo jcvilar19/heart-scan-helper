@@ -18,13 +18,13 @@ export const Route = createFileRoute("/")({
   component: LandingPage,
   head: () => ({
     meta: [
-      { title: "CardioScan — AI Cardiomegaly Detection from Chest X-rays" },
+      { title: "Coraçai — AI Cardiomegaly Detection from Chest X-rays" },
       {
         name: "description",
         content:
           "AI-assisted cardiomegaly screening from chest X-rays. Upload images and get a probability score in seconds.",
       },
-      { property: "og:title", content: "CardioScan — AI Cardiomegaly Detection" },
+      { property: "og:title", content: "Coraçai — AI Cardiomegaly Detection" },
       {
         property: "og:description",
         content: "AI-assisted cardiomegaly screening from chest X-rays.",
