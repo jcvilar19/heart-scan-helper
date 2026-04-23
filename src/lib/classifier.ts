@@ -12,6 +12,8 @@ export type ClassificationResult = {
   source: PredictionSource;
 };
 
+export type InferenceMode = "accurate" | "fast";
+
 const DECISION_THRESHOLD = 0.5;
 
 /**
@@ -53,7 +55,10 @@ function explainAxiosError(error: unknown): string {
   return (error as Error).message ?? "Unknown error";
 }
 
-export async function classifyImage(file: File): Promise<ClassificationResult> {
+export async function classifyImage(
+  file: File,
+  options: { mode?: InferenceMode } = {},
+): Promise<ClassificationResult> {
   const useMock = import.meta.env.VITE_USE_MOCK_PREDICTION === "true";
 
   if (useMock) {
@@ -62,9 +67,20 @@ export async function classifyImage(file: File): Promise<ClassificationResult> {
   }
 
   try {
-    const response = await requestPrediction(file);
+    const mode = options.mode ?? "accurate";
+    const response = await requestPrediction(file, {
+      useTta: mode !== "fast",
+      maxModels: mode === "fast" ? 1 : undefined,
+    });
     const probability = Math.min(1, Math.max(0, response.confidence));
-    const prediction: 0 | 1 = probability >= DECISION_THRESHOLD ? 1 : 0;
+    // Use numeric server output directly when present.
+    const threshold = response.threshold ?? DECISION_THRESHOLD;
+    const prediction: 0 | 1 =
+      response.prediction_binary === 0 || response.prediction_binary === 1
+        ? response.prediction_binary
+        : probability >= threshold
+          ? 1
+          : 0;
     return {
       label: response.prediction,
       probability,

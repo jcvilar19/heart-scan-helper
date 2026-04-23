@@ -2,6 +2,11 @@ import axios from "axios";
 import { resolvePredictApiBaseUrl } from "@/lib/predict-api-url";
 import type { PredictApiResponse } from "@/types/prediction";
 
+export type PredictionRequestOptions = {
+  useTta?: boolean;
+  maxModels?: number;
+};
+
 /**
  * Headers added to every call to the inference server.
  *
@@ -18,7 +23,10 @@ function getBaseUrl(): string {
   return resolvePredictApiBaseUrl();
 }
 
-export async function requestPrediction(file: File): Promise<PredictApiResponse> {
+export async function requestPrediction(
+  file: File,
+  options: PredictionRequestOptions = {},
+): Promise<PredictApiResponse> {
   const baseURL = getBaseUrl();
   const formData = new FormData();
   formData.append("image", file);
@@ -30,6 +38,13 @@ export async function requestPrediction(file: File): Promise<PredictApiResponse>
   const { data } = await axios.post<PredictApiResponse>(`${baseURL}/predict`, formData, {
     headers: { ...PREDICT_DEFAULT_HEADERS, "Content-Type": "multipart/form-data" },
     timeout: 60000,
+    params:
+      options.useTta === undefined && options.maxModels === undefined
+        ? undefined
+        : {
+            ...(options.useTta === undefined ? {} : { use_tta: options.useTta }),
+            ...(options.maxModels === undefined ? {} : { max_models: options.maxModels }),
+          },
   });
   console.info("[predict] response:", data);
   if (data.checkpoints?.length) {

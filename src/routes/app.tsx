@@ -7,7 +7,7 @@ import { AppHeader } from "@/components/app-header";
 import { ImageDropzone } from "@/components/image-dropzone";
 import { ResultsGallery, type AnalysisItem } from "@/components/result-card";
 import { Button } from "@/components/ui/button";
-import { classifyImage } from "@/lib/classifier";
+import { classifyImage, type InferenceMode } from "@/lib/classifier";
 import { resolvePredictApiBaseUrl } from "@/lib/predict-api-url";
 import { PREDICT_DEFAULT_HEADERS } from "@/services/predict";
 import { validateChestXray, warmupValidator } from "@/lib/image-validator";
@@ -35,10 +35,16 @@ export const Route = createFileRoute("/app")({
 });
 
 function AppPage() {
+  const SETTINGS_MODE_KEY = "inference_mode";
   const { user, loading } = useAuth();
   const navigate = useNavigate();
   const [items, setItems] = useState<AnalysisItem[]>([]);
   const [health, setHealth] = useState<HealthState>({ status: "unknown" });
+  const [inferenceMode, setInferenceMode] = useState<InferenceMode>(() => {
+    if (typeof window === "undefined") return "accurate";
+    const stored = window.localStorage.getItem(SETTINGS_MODE_KEY);
+    return stored === "fast" ? "fast" : "accurate";
+  });
   // Tracks which item ids we've already kicked off `saveItem` for, so React
   // strict-mode double-renders don't trigger duplicate uploads.
   const saveAttempted = useRef<Set<string>>(new Set());
@@ -59,6 +65,11 @@ function AppPage() {
     // later sessions.
     void warmupValidator();
   }, [user]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(SETTINGS_MODE_KEY, inferenceMode);
+  }, [inferenceMode]);
 
   const checkHealth = useCallback(async () => {
     const useMock = import.meta.env.VITE_USE_MOCK_PREDICTION === "true";
@@ -150,7 +161,7 @@ function AppPage() {
         }
 
         setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, status: "analyzing" } : i)));
-        const result = await classifyImage(item.file);
+        const result = await classifyImage(item.file, { mode: inferenceMode });
         setItems((prev) =>
           prev.map((i) => (i.id === item.id ? { ...i, status: "done", result } : i)),
         );
@@ -355,6 +366,10 @@ function AppPage() {
         </section>
 
         <section className="mx-auto mt-4 max-w-3xl">
+          <InferenceSettings mode={inferenceMode} onModeChange={setInferenceMode} />
+        </section>
+
+        <section className="mx-auto mt-4 max-w-3xl">
           <ImageDropzone onFiles={handleFiles} />
         </section>
 
@@ -373,6 +388,43 @@ function AppPage() {
           diagnosis. <Link to="/" className="underline hover:text-foreground">Back to home</Link>
         </p>
       </main>
+    </div>
+  );
+}
+
+function InferenceSettings({
+  mode,
+  onModeChange,
+}: {
+  mode: InferenceMode;
+  onModeChange: (mode: InferenceMode) => void;
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-card px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium text-foreground">Settings</p>
+          <p className="text-xs text-muted-foreground">
+            Prediction mode: Fast disables TTA for lower latency, Accurate keeps full TTA.
+          </p>
+        </div>
+        <div className="inline-flex rounded-md border border-border p-1">
+          <Button
+            size="sm"
+            variant={mode === "fast" ? "default" : "ghost"}
+            onClick={() => onModeChange("fast")}
+          >
+            Fast
+          </Button>
+          <Button
+            size="sm"
+            variant={mode === "accurate" ? "default" : "ghost"}
+            onClick={() => onModeChange("accurate")}
+          >
+            Accurate
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

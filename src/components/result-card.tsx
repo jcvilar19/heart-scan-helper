@@ -265,10 +265,15 @@ function ResultState({
     );
   }
 
-  const probabilityPct = `${(item.result.probability * 100).toFixed(1)}%`;
-  const verdict = item.result.prediction === 1 ? "Potential indication" : "No clear indication";
+  const verdict = item.result.prediction === 1 ? "Heart disease detected" : "No heart disease detected";
   const verdictClass = item.result.prediction === 1 ? "text-amber-600" : "text-emerald-600";
-  const lowConfidence = item.result.probability < 0.9;
+  const probabilityPct = `${(item.result.probability * 100).toFixed(1)}%`;
+  const certainty =
+    item.result.probability >= 0.85
+      ? "high certainty"
+      : item.result.probability >= 0.65
+        ? "moderate certainty"
+        : "lower certainty";
 
   return (
     <div className="space-y-2 text-sm">
@@ -277,26 +282,12 @@ function ResultState({
         Analysis complete
       </p>
       <p className="text-muted-foreground">
-        Model suggests:{" "}
-        <span className="font-medium text-foreground">{item.result.label || PATHOLOGY_LABEL}</span>
+        Diagnosis: <span className={`font-medium ${verdictClass}`}>{verdict}</span>
       </p>
       <p className="text-muted-foreground">
-        Confidence: <span className="font-medium text-foreground">{probabilityPct}</span>
+        Probability: <span className="font-medium text-foreground">{probabilityPct}</span> (
+        <span className="font-medium text-foreground">{certainty}</span>)
       </p>
-      <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-        <div
-          className={item.result.prediction === 1 ? "h-full bg-amber-500" : "h-full bg-emerald-500"}
-          style={{ width: probabilityPct }}
-        />
-      </div>
-      <p className="text-muted-foreground text-xs">
-        Verdict: <span className={`font-medium ${verdictClass}`}>{verdict}</span>
-      </p>
-      {lowConfidence && (
-        <p className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-700">
-          Confidence (~90%). Interpret with caution and specialist review.
-        </p>
-      )}
       {item.result.heatmapUrl && (
         <div className="space-y-1">
           <p className="text-xs text-muted-foreground">Grad-CAM heatmap</p>

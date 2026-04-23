@@ -41,7 +41,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torchvision.transforms as T
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from huggingface_hub import hf_hub_download
 from PIL import Image
@@ -203,7 +203,21 @@ def _first_checkpoint_path() -> Path:
         manifest = _resolve_manifest_path()
         df = pd.read_csv(manifest)
         first = df["checkpoint"].iloc[0]
-        return _resolve_checkpoint(first)
+        p = Path(first)
+        if p.is_absolute() and p.exists():
+            return p
+        # Local resolution first.
+        for candidate in (NOTEBOOKS_DIR / first, RESULTS_DIR / Path(first).name):
+            if candidate.exists():
+                return candidate
+        # `_first_checkpoint_path` is executed during module import (before
+        # `_resolve_checkpoint` is defined), so we do HF download inline here.
+        for name in (first, Path(first).name):
+            try:
+                return _hf_download(name)
+            except Exception:  # noqa: BLE001
+                continue
+        raise FileNotFoundError(f"Could not resolve first checkpoint from manifest entry: {first!r}")
     except Exception:  # noqa: BLE001
         pass
     fallback = RESULTS_DIR / "best_model.pth"
@@ -450,7 +464,11 @@ def health() -> dict:
 
 
 @torch.no_grad()
-def _predict_probability_detailed(pil_gray: Image.Image) -> dict:
+def _predict_probability_detailed(
+    pil_gray: Image.Image,
+    use_tta: bool,
+    max_models: int | None = None,
+) -> dict:
     """Run ensemble (+ optional TTA) on a single PIL image.
 
     Returns a dict with per-model / per-TTA logits for transparency.
@@ -458,14 +476,18 @@ def _predict_probability_detailed(pil_gray: Image.Image) -> dict:
     average logits across TTA (per model), then average across models,
     then sigmoid.
     """
-    pipelines = _tta_pipelines(IMG_SIZE) if USE_TTA else [_single_eval_pipeline(IMG_SIZE)]
+    pipelines = _tta_pipelines(IMG_SIZE) if use_tta else [_single_eval_pipeline(IMG_SIZE)]
 
     tensors = [_normalize_fn(pipeline(pil_gray)) for pipeline in pipelines]
     batch = torch.stack(tensors, dim=0).to(DEVICE)  # (num_tta, 3, H, W)
 
+    active_model_count = len(_ensemble) if max_models is None else max(1, min(max_models, len(_ensemble)))
+    active_models = _ensemble[:active_model_count]
+    active_checkpoints = _loaded_checkpoints[:active_model_count]
+
     per_model_tta_logits: list[np.ndarray] = []
     per_model_mean_logit: list[float] = []
-    for model in _ensemble:
+    for model in active_models:
         logit_vec = cardio_logit(model, batch).float().cpu().numpy()  # (num_tta,)
         per_model_tta_logits.append(logit_vec)
         per_model_mean_logit.append(float(np.mean(logit_vec)))
@@ -477,17 +499,23 @@ def _predict_probability_detailed(pil_gray: Image.Image) -> dict:
         "probability": probability,
         "ensemble_mean_logit": ensemble_mean_logit,
         "per_model_mean_logit": {
-            name: lg for name, lg in zip(_loaded_checkpoints, per_model_mean_logit)
+            name: lg for name, lg in zip(active_checkpoints, per_model_mean_logit)
         },
         "per_model_tta_logits": {
-            name: lg.tolist() for name, lg in zip(_loaded_checkpoints, per_model_tta_logits)
+            name: lg.tolist() for name, lg in zip(active_checkpoints, per_model_tta_logits)
         },
         "num_tta_passes": batch.shape[0],
+        "models_used": active_model_count,
+        "checkpoints_used": active_checkpoints,
     }
 
 
 @app.post("/predict")
-async def predict(image: UploadFile = File(...)) -> dict:
+async def predict(
+    image: UploadFile = File(...),
+    use_tta: bool | None = Query(default=None, description="Override TTA for this request."),
+    max_models: int | None = Query(default=None, ge=1, description="Use only first N models for speed."),
+) -> dict:
     if not _ensemble:
         raise HTTPException(status_code=503, detail="Model not ready")
 
@@ -500,8 +528,14 @@ async def predict(image: UploadFile = File(...)) -> dict:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"Could not decode image: {exc}") from exc
 
+    effective_use_tta = USE_TTA if use_tta is None else use_tta
+
     try:
-        details = _predict_probability_detailed(pil)
+        details = _predict_probability_detailed(
+            pil,
+            use_tta=effective_use_tta,
+            max_models=max_models,
+        )
     except Exception as exc:  # noqa: BLE001
         log.exception("Inference failed")
         raise HTTPException(status_code=500, detail=f"Inference error: {exc}") from exc
@@ -522,13 +556,14 @@ async def predict(image: UploadFile = File(...)) -> dict:
 
     return {
         "prediction": POSITIVE_LABEL if is_positive else NEGATIVE_LABEL,
+        "prediction_binary": 1 if is_positive else 0,
         "confidence": probability,
         "heatmap_url": None,
         "source": "model",
         "threshold": DECISION_THRESHOLD,
-        "ensemble_size": len(_ensemble),
-        "use_tta": USE_TTA,
-        "checkpoints": _loaded_checkpoints,
+        "ensemble_size": details["models_used"],
+        "use_tta": effective_use_tta,
+        "checkpoints": details["checkpoints_used"],
     }
 
 
@@ -548,10 +583,11 @@ async def debug_predict(image: UploadFile = File(...)) -> dict:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"Could not decode image: {exc}") from exc
 
-    details = _predict_probability_detailed(pil)
+    details = _predict_probability_detailed(pil, use_tta=USE_TTA)
     details["prediction"] = (
         POSITIVE_LABEL if details["probability"] >= DECISION_THRESHOLD else NEGATIVE_LABEL
     )
+    details["prediction_binary"] = 1 if details["probability"] >= DECISION_THRESHOLD else 0
     details["threshold"] = DECISION_THRESHOLD
     details["use_tta"] = USE_TTA
     details["checkpoints"] = _loaded_checkpoints
