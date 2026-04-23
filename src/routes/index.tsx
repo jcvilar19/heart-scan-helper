@@ -265,13 +265,13 @@ function Step({
 }) {
   return (
     <li
-      className="relative rounded-2xl border border-border bg-card p-6"
+      className="relative rounded-2xl border border-border bg-card p-6 text-center"
       style={{ boxShadow: "var(--shadow-card)" }}
     >
-      <span className="absolute -top-3 left-6 inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+      <span className="absolute left-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
         {n}
       </span>
-      <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-lg bg-accent text-primary">
+      <div className="mx-auto mb-3 inline-flex h-10 w-10 items-center justify-center rounded-lg bg-accent text-primary">
         {icon}
       </div>
       <h3 className="text-base font-semibold">{title}</h3>
