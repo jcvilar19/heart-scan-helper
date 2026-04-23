@@ -78,13 +78,6 @@ export function ResultsGallery({
             className="overflow-hidden rounded-xl border border-border bg-card"
             style={{ boxShadow: "var(--shadow-card)" }}
           >
-            <div className="aspect-[4/3] w-full bg-muted">
-              <img
-                src={item.previewUrl}
-                alt={item.file.name}
-                className="h-full w-full object-cover"
-              />
-            </div>
             <div className="space-y-3 p-4">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 space-y-0.5">
@@ -101,6 +94,15 @@ export function ResultsGallery({
                 </Button>
               </div>
               <PatientFields item={item} onPatientChange={onPatientChange} />
+            </div>
+            <div className="aspect-[4/3] w-full bg-muted">
+              <img
+                src={item.previewUrl}
+                alt={item.file.name}
+                className="h-full w-full object-cover"
+              />
+            </div>
+            <div className="space-y-3 p-4 pt-0">
               <ResultState item={item} onNotesChange={onNotesChange} />
             </div>
           </article>
