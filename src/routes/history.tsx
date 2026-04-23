@@ -176,9 +176,25 @@ function HistoryPage() {
               Your most recent saved scans, newest first.
             </p>
           </div>
-          <Button asChild variant="outline" size="sm">
-            <Link to="/">New scan</Link>
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              onClick={handleAiSummary}
+              disabled={aiLoading || rows.length === 0}
+              className="gap-1.5"
+            >
+              {aiLoading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="h-3.5 w-3.5" />
+              )}
+              {aiLoading ? "Analyzing…" : "AI summary"}
+            </Button>
+            <Button asChild variant="outline" size="sm">
+              <Link to="/">New scan</Link>
+            </Button>
+          </div>
         </div>
 
         {!loading && rows.length > 0 && (
