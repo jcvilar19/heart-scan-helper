@@ -21,9 +21,9 @@ export type Database = {
           image_name: string
           image_path: string
           notes: string | null
+          pathology: string
           patient_id: string | null
           patient_name: string | null
-          pathology: string
           prediction: number
           probability: number
           user_id: string
@@ -34,9 +34,9 @@ export type Database = {
           image_name: string
           image_path: string
           notes?: string | null
+          pathology?: string
           patient_id?: string | null
           patient_name?: string | null
-          pathology?: string
           prediction: number
           probability: number
           user_id: string
@@ -47,9 +47,9 @@ export type Database = {
           image_name?: string
           image_path?: string
           notes?: string | null
+          pathology?: string
           patient_id?: string | null
           patient_name?: string | null
-          pathology?: string
           prediction?: number
           probability?: number
           user_id?: string
