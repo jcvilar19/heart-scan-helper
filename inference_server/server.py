@@ -29,6 +29,7 @@ Environment overrides (optional)
 from __future__ import annotations
 
 import io
+import json
 import logging
 import os
 import sys
@@ -42,6 +43,7 @@ import torch.nn as nn
 import torchvision.transforms as T
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from huggingface_hub import hf_hub_download
 from PIL import Image
 
 # ---------------------------------------------------------------------------
@@ -53,6 +55,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TRAINING_DIR = REPO_ROOT / "model_training"
 NOTEBOOKS_DIR = TRAINING_DIR / "notebooks"
 RESULTS_DIR = NOTEBOOKS_DIR / "results"
+HF_MODEL_REPO_ID = os.environ.get("HF_MODEL_REPO_ID", "").strip()
+HF_MODEL_REVISION = os.environ.get("HF_MODEL_REVISION", "main")
+HF_HUB_TOKEN = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+HF_MODEL_CACHE_DIR = os.environ.get("HF_MODEL_CACHE_DIR", str(REPO_ROOT / ".hf-model-cache"))
 
 if str(TRAINING_DIR) not in sys.path:
     sys.path.insert(0, str(TRAINING_DIR))
@@ -148,25 +154,68 @@ def _detect_backbone_from_checkpoint(ckpt_path: Path) -> str:
     return CFG.backbone
 
 
+def _hf_download(filename: str) -> Path:
+    """Download a file from HF model repo and return local cached path."""
+    if not HF_MODEL_REPO_ID:
+        raise FileNotFoundError(
+            f"File {filename!r} not found locally and HF_MODEL_REPO_ID is not set."
+        )
+    path = hf_hub_download(
+        repo_id=HF_MODEL_REPO_ID,
+        filename=filename,
+        revision=HF_MODEL_REVISION,
+        token=HF_HUB_TOKEN,
+        cache_dir=HF_MODEL_CACHE_DIR,
+    )
+    return Path(path)
+
+
+def _resolve_manifest_path() -> Path:
+    """Find `ensemble_manifest.csv` locally first, else download from HF."""
+    local = RESULTS_DIR / "ensemble_manifest.csv"
+    if local.exists():
+        return local
+    log.info(
+        "Local ensemble_manifest.csv not found under %s; downloading from HF repo %s",
+        RESULTS_DIR,
+        HF_MODEL_REPO_ID or "<unset>",
+    )
+    return _hf_download("ensemble_manifest.csv")
+
+
+def _resolve_optional_support_file(name: str) -> Path | None:
+    """Find optional support file locally; if missing try HF model repo."""
+    local = RESULTS_DIR / name
+    if local.exists():
+        return local
+    try:
+        return _hf_download(name)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Backbone + image size: auto-detected from the checkpoint so the server never
 # runs with a mismatched architecture. Can still be forced via env vars.
 # ---------------------------------------------------------------------------
 def _first_checkpoint_path() -> Path:
-    manifest = RESULTS_DIR / "ensemble_manifest.csv"
-    if manifest.exists():
+    try:
+        manifest = _resolve_manifest_path()
         df = pd.read_csv(manifest)
         first = df["checkpoint"].iloc[0]
-        p = Path(first)
-        if p.is_absolute() and p.exists():
-            return p
-        for candidate in (NOTEBOOKS_DIR / first, RESULTS_DIR / Path(first).name):
-            if candidate.exists():
-                return candidate
+        return _resolve_checkpoint(first)
+    except Exception:  # noqa: BLE001
+        pass
     fallback = RESULTS_DIR / "best_model.pth"
     if fallback.exists():
         return fallback
-    raise FileNotFoundError("No checkpoints found under model_training/notebooks/results/")
+    try:
+        return _hf_download("best_model.pth")
+    except Exception as exc:  # noqa: BLE001
+        raise FileNotFoundError(
+            "No checkpoints found locally and could not download from HF. "
+            "Set HF_MODEL_REPO_ID and upload ensemble_manifest.csv + *.pth."
+        ) from exc
 
 
 _DETECTED_BACKBONE = _detect_backbone_from_checkpoint(_first_checkpoint_path())
@@ -180,11 +229,9 @@ USE_TTA: bool = os.environ.get("MODEL_USE_TTA", "true").lower() in {"1", "true",
 
 def _default_threshold() -> float:
     """Use the training-selected threshold when available."""
-    metrics_path = RESULTS_DIR / "val_metrics_final.json"
-    if metrics_path.exists():
+    metrics_path = _resolve_optional_support_file("val_metrics_final.json")
+    if metrics_path is not None:
         try:
-            import json
-
             with open(metrics_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             thr = float(data.get("threshold", 0.5))
@@ -282,14 +329,27 @@ def _single_eval_pipeline(size: int) -> T.Compose:
 # Ensemble loading
 # ---------------------------------------------------------------------------
 def _resolve_checkpoint(p: str) -> Path:
-    """Manifest paths are stored relative to ``model_training/notebooks/``."""
+    """Resolve checkpoint locally first, else download from HF model repo."""
     path = Path(p)
     if path.is_absolute() and path.exists():
         return path
     for candidate in (NOTEBOOKS_DIR / p, RESULTS_DIR / Path(p).name):
         if candidate.exists():
             return candidate
-    raise FileNotFoundError(f"Checkpoint not found: {p!r}")
+    # In model repos we usually store files flat, so try both raw entry and basename.
+    tried = [p]
+    if Path(p).name != p:
+        tried.append(Path(p).name)
+    for name in tried:
+        try:
+            downloaded = _hf_download(name)
+            log.info("  → downloaded %s from HF repo %s", name, HF_MODEL_REPO_ID)
+            return downloaded
+        except Exception:  # noqa: BLE001
+            continue
+    raise FileNotFoundError(
+        f"Checkpoint not found locally and not downloadable from HF repo: {p!r}"
+    )
 
 
 def _load_ensemble() -> List[nn.Module]:
@@ -297,19 +357,23 @@ def _load_ensemble() -> List[nn.Module]:
     CFG.backbone = BACKBONE
     CFG.img_size = IMG_SIZE
 
-    manifest = RESULTS_DIR / "ensemble_manifest.csv"
-    if manifest.exists():
+    try:
+        manifest = _resolve_manifest_path()
         df = pd.read_csv(manifest)
         checkpoint_paths = [_resolve_checkpoint(p) for p in df["checkpoint"].tolist()]
-        log.info("Loading ensemble of %d models from %s", len(checkpoint_paths), manifest.name)
-    else:
+        log.info(
+            "Loading ensemble of %d models from %s",
+            len(checkpoint_paths),
+            manifest,
+        )
+    except Exception:
         best = RESULTS_DIR / "best_model.pth"
-        if not best.exists():
-            raise FileNotFoundError(
-                f"Neither {manifest} nor {best} exist. Train a model before starting the server."
-            )
-        checkpoint_paths = [best]
-        log.info("No manifest found, falling back to single checkpoint: %s", best.name)
+        if best.exists():
+            checkpoint_paths = [best]
+            log.info("No manifest found, falling back to local checkpoint: %s", best.name)
+        else:
+            checkpoint_paths = [_resolve_checkpoint("best_model.pth")]
+            log.info("No manifest found, falling back to HF checkpoint: best_model.pth")
 
     models: list[nn.Module] = []
     for ckpt_path in checkpoint_paths:
@@ -360,11 +424,11 @@ _loaded_checkpoints: list[str] = []
 @app.on_event("startup")
 def _startup() -> None:
     global _ensemble, _loaded_checkpoints
-    manifest = RESULTS_DIR / "ensemble_manifest.csv"
-    if manifest.exists():
+    try:
+        manifest = _resolve_manifest_path()
         df = pd.read_csv(manifest)
         _loaded_checkpoints = [Path(p).name for p in df["checkpoint"].tolist()]
-    else:
+    except Exception:
         _loaded_checkpoints = ["best_model.pth"]
     _ensemble = _load_ensemble()
 

@@ -1,5 +1,5 @@
 seed,checkpoint_metric,best_val_score,checkpoint
-8,composite,0.9151234567901235,results/model_seed8.pth
-7,composite,0.9128804191788686,results/model_seed7.pth
-2024,composite,0.9123241458512776,results/model_seed2024.pth
-849,composite,0.904374820556991,results/model_seed849.pth
+8,composite,0.9151234567901235,model_seed8.pth
+7,composite,0.9128804191788686,model_seed7.pth
+2024,composite,0.9123241458512776,model_seed2024.pth
+849,composite,0.904374820556991,model_seed849.pth

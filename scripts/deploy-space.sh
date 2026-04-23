@@ -35,6 +35,7 @@ SPACE_SRC_DIR="$ROOT_DIR/space"
 : "${HF_SPACE:?Set HF_SPACE (the Space name you created) — e.g. HF_SPACE=cardio-scan-api}"
 HF_BRANCH="${HF_BRANCH:-main}"
 COMMIT_MSG="${COMMIT_MSG:-Deploy CardioScan inference $(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+HF_MODEL_REPO_ID="${HF_MODEL_REPO_ID:-}"
 
 if ! command -v git >/dev/null 2>&1; then
   echo "git is required" >&2; exit 1
@@ -95,17 +96,31 @@ rsync -a --delete \
 rsync -a --delete \
       --exclude '__pycache__' --exclude '*.pyc' \
       "$ROOT_DIR/model_training/src/"           ./model_training/src/
-rsync -a --delete \
-      --include '*/' \
-      --include '*.pth' --include '*.csv' --include '*.json' \
-      --exclude '*' \
-      "$ROOT_DIR/model_training/notebooks/results/" ./model_training/notebooks/results/
+if [[ -n "$HF_MODEL_REPO_ID" ]]; then
+  echo "[deploy-space] HF_MODEL_REPO_ID is set ($HF_MODEL_REPO_ID) — skipping local .pth copy"
+  # Keep only lightweight metadata in the Space image. The server downloads
+  # manifest/checkpoints at runtime from the HF model repo.
+  rsync -a --delete \
+        --include '*/' \
+        --include '*.csv' --include '*.json' \
+        --exclude '*.pth' \
+        --exclude '*' \
+        "$ROOT_DIR/model_training/notebooks/results/" ./model_training/notebooks/results/
+else
+  rsync -a --delete \
+        --include '*/' \
+        --include '*.pth' --include '*.csv' --include '*.json' \
+        --exclude '*' \
+        "$ROOT_DIR/model_training/notebooks/results/" ./model_training/notebooks/results/
+fi
 
 # Sanity check
 test -f ./Dockerfile
 test -f ./inference_server/server.py
 test -f ./model_training/src/model.py
-ls ./model_training/notebooks/results/*.pth >/dev/null
+if [[ -z "$HF_MODEL_REPO_ID" ]]; then
+  ls ./model_training/notebooks/results/*.pth >/dev/null
+fi
 
 git add -A
 if git diff --cached --quiet; then
