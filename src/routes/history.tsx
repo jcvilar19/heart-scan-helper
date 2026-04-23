@@ -122,6 +122,34 @@ function HistoryPage() {
           </Button>
         </div>
 
+        {!loading && rows.length > 0 && (
+          <div className="mb-6 flex items-center gap-3">
+            <div className="relative max-w-md flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search by patient name, ID or filename"
+                className="pl-9 pr-9"
+                aria-label="Search saved scans"
+              />
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => setQuery("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  aria-label="Clear search"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            <span className="text-xs text-muted-foreground">
+              {filteredRows.length} of {rows.length}
+            </span>
+          </div>
+        )}
+
         {loading ? (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {Array.from({ length: 6 }).map((_, i) => (
