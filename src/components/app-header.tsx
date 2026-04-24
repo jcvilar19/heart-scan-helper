@@ -29,7 +29,7 @@ export function AppHeader() {
           <img
             src={logoUrl}
             alt="Coraçai logo"
-            className="h-9 w-9 rounded-lg object-cover shadow-[var(--shadow-elegant)] transition-transform group-hover:scale-105"
+            className="h-6 w-6 rounded-md object-cover shadow-[var(--shadow-elegant)] transition-transform group-hover:scale-105"
           />
           <div className="flex flex-col leading-tight">
             <span className="text-sm font-semibold tracking-tight">Coraçai</span>
