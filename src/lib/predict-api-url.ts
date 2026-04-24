@@ -16,19 +16,35 @@ const DEFAULT_PREDICT_API_URL = "https://jcvilar-day4model.hf.space";
 
 const DEV_LOCAL_PREDICT_API_URL = "http://127.0.0.1:8000";
 
+function isPrivateLanHost(hostname: string): boolean {
+  return (
+    /^192\.168\./.test(hostname) ||
+    /^10\./.test(hostname) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(hostname)
+  );
+}
+
+function isLocalDevHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+}
+
 export function resolvePredictApiBaseUrl(): string {
-  const configured =
-    import.meta.env.VITE_PREDICT_API_URL ??
-    (import.meta.env.DEV ? DEV_LOCAL_PREDICT_API_URL : DEFAULT_PREDICT_API_URL);
+  const envConfigured = import.meta.env.VITE_PREDICT_API_URL;
+
   if (typeof window === "undefined") {
-    return configured;
+    return envConfigured ?? DEFAULT_PREDICT_API_URL;
   }
+
   const pageHost = window.location.hostname;
-  const pageIsPrivateLan =
-    /^192\.168\./.test(pageHost) || /^10\./.test(pageHost) || /^172\.(1[6-9]|2\d|3[01])\./.test(pageHost);
+  const pageIsPrivateLan = isPrivateLanHost(pageHost);
+  const pageIsLocalDevHost = isLocalDevHost(pageHost) || pageIsPrivateLan;
+  const configured =
+    envConfigured ?? (pageIsLocalDevHost ? DEV_LOCAL_PREDICT_API_URL : DEFAULT_PREDICT_API_URL);
+
   if (!pageIsPrivateLan) {
     return configured;
   }
+
   try {
     const u = new URL(configured);
     if (u.hostname === "127.0.0.1" || u.hostname === "localhost") {
@@ -38,5 +54,6 @@ export function resolvePredictApiBaseUrl(): string {
   } catch {
     // leave configured as-is
   }
+
   return configured;
 }
