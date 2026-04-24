@@ -1,6 +1,7 @@
 export type PredictApiResponse = {
   prediction: string;
   prediction_binary?: 0 | 1;
+  mode?: "accurate" | "fast";
   confidence: number; // [0, 1]
   heatmap_url?: string | null;
   source?: "model";

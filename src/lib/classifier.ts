@@ -69,6 +69,7 @@ export async function classifyImage(
   try {
     const mode = options.mode ?? "accurate";
     const response = await requestPrediction(file, {
+      mode,
       useTta: mode !== "fast",
       maxModels: mode === "fast" ? 1 : undefined,
     });

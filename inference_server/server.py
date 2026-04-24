@@ -34,7 +34,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import List
+from typing import List, Literal
 
 import numpy as np
 import pandas as pd
@@ -59,6 +59,10 @@ HF_MODEL_REPO_ID = os.environ.get("HF_MODEL_REPO_ID", "").strip()
 HF_MODEL_REVISION = os.environ.get("HF_MODEL_REVISION", "main")
 HF_HUB_TOKEN = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
 HF_MODEL_CACHE_DIR = os.environ.get("HF_MODEL_CACHE_DIR", str(REPO_ROOT / ".hf-model-cache"))
+ACCURATE_MANIFEST = os.environ.get("ACCURATE_MANIFEST_FILE", "ensemble_manifest.csv")
+FAST_MANIFEST = os.environ.get("FAST_MANIFEST_FILE", "fast/fast_ensemble_manifest.csv")
+ACCURATE_METRICS = os.environ.get("ACCURATE_METRICS_FILE", "val_metrics_final.json")
+FAST_METRICS = os.environ.get("FAST_METRICS_FILE", "fast/fast_val_metrics_final.json")
 
 if str(TRAINING_DIR) not in sys.path:
     sys.path.insert(0, str(TRAINING_DIR))
@@ -170,28 +174,65 @@ def _hf_download(filename: str) -> Path:
     return Path(path)
 
 
-def _resolve_manifest_path() -> Path:
-    """Find `ensemble_manifest.csv` locally first, else download from HF."""
-    local = RESULTS_DIR / "ensemble_manifest.csv"
-    if local.exists():
-        return local
+def _manifest_candidates(mode: Literal["accurate", "fast"]) -> tuple[list[Path], list[str]]:
+    if mode == "fast":
+        local = [RESULTS_DIR / "fast_model" / "fast_ensemble_manifest.csv", RESULTS_DIR / "fast_ensemble_manifest.csv"]
+        remote = [FAST_MANIFEST, "fast_ensemble_manifest.csv"]
+    else:
+        local = [RESULTS_DIR / "ensemble_manifest.csv"]
+        remote = [ACCURATE_MANIFEST, "ensemble_manifest.csv"]
+    return local, remote
+
+
+def _metrics_candidates(mode: Literal["accurate", "fast"]) -> tuple[list[Path], list[str]]:
+    if mode == "fast":
+        local = [RESULTS_DIR / "fast_model" / "fast_val_metrics_final.json", RESULTS_DIR / "fast_val_metrics_final.json"]
+        remote = [FAST_METRICS, "fast_val_metrics_final.json"]
+    else:
+        local = [RESULTS_DIR / "val_metrics_final.json"]
+        remote = [ACCURATE_METRICS, "val_metrics_final.json"]
+    return local, remote
+
+
+def _resolve_manifest_path(mode: Literal["accurate", "fast"] = "accurate") -> Path:
+    """Find mode-specific manifest locally first, else download from HF."""
+    local_candidates, remote_candidates = _manifest_candidates(mode)
+    for local in local_candidates:
+        if local.exists():
+            return local
     log.info(
-        "Local ensemble_manifest.csv not found under %s; downloading from HF repo %s",
+        "Local %s manifest not found under %s; downloading from HF repo %s",
+        mode,
         RESULTS_DIR,
         HF_MODEL_REPO_ID or "<unset>",
     )
-    return _hf_download("ensemble_manifest.csv")
+    for filename in remote_candidates:
+        try:
+            return _hf_download(filename)
+        except Exception:  # noqa: BLE001
+            continue
+    raise FileNotFoundError(f"Could not resolve {mode} manifest from local paths or HF")
 
 
-def _resolve_optional_support_file(name: str) -> Path | None:
+def _resolve_optional_support_file(
+    name: str,
+    mode: Literal["accurate", "fast"] = "accurate",
+) -> Path | None:
     """Find optional support file locally; if missing try HF model repo."""
-    local = RESULTS_DIR / name
-    if local.exists():
-        return local
-    try:
-        return _hf_download(name)
-    except Exception:  # noqa: BLE001
-        return None
+    if name == "val_metrics_final.json":
+        local_candidates, remote_candidates = _metrics_candidates(mode)
+    else:
+        local_candidates = [RESULTS_DIR / name]
+        remote_candidates = [name]
+    for local in local_candidates:
+        if local.exists():
+            return local
+    for remote in remote_candidates:
+        try:
+            return _hf_download(remote)
+        except Exception:  # noqa: BLE001
+            continue
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -200,14 +241,18 @@ def _resolve_optional_support_file(name: str) -> Path | None:
 # ---------------------------------------------------------------------------
 def _first_checkpoint_path() -> Path:
     try:
-        manifest = _resolve_manifest_path()
+        manifest = _resolve_manifest_path("accurate")
         df = pd.read_csv(manifest)
         first = df["checkpoint"].iloc[0]
         p = Path(first)
         if p.is_absolute() and p.exists():
             return p
         # Local resolution first.
-        for candidate in (NOTEBOOKS_DIR / first, RESULTS_DIR / Path(first).name):
+        for candidate in (
+            NOTEBOOKS_DIR / first,
+            RESULTS_DIR / Path(first).name,
+            RESULTS_DIR / "fast_model" / Path(first).name,
+        ):
             if candidate.exists():
                 return candidate
         # `_first_checkpoint_path` is executed during module import (before
@@ -243,7 +288,7 @@ USE_TTA: bool = os.environ.get("MODEL_USE_TTA", "true").lower() in {"1", "true",
 
 def _default_threshold() -> float:
     """Use the training-selected threshold when available."""
-    metrics_path = _resolve_optional_support_file("val_metrics_final.json")
+    metrics_path = _resolve_optional_support_file("val_metrics_final.json", mode="accurate")
     if metrics_path is not None:
         try:
             with open(metrics_path, "r", encoding="utf-8") as f:
@@ -257,6 +302,25 @@ def _default_threshold() -> float:
 
 
 DECISION_THRESHOLD: float = float(os.environ.get("MODEL_THRESHOLD", str(_default_threshold())))
+
+
+def _default_fast_threshold() -> float:
+    metrics_path = _resolve_optional_support_file("val_metrics_final.json", mode="fast")
+    if metrics_path is not None:
+        try:
+            with open(metrics_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            thr = float(data.get("threshold", DECISION_THRESHOLD))
+            if 0.0 <= thr <= 1.0:
+                return thr
+        except Exception:  # noqa: BLE001
+            pass
+    return DECISION_THRESHOLD
+
+
+FAST_DECISION_THRESHOLD: float = float(
+    os.environ.get("MODEL_FAST_THRESHOLD", str(_default_fast_threshold()))
+)
 
 _DEFAULT_ORIGINS = (
     "http://localhost:3000,"
@@ -342,18 +406,24 @@ def _single_eval_pipeline(size: int) -> T.Compose:
 # ---------------------------------------------------------------------------
 # Ensemble loading
 # ---------------------------------------------------------------------------
-def _resolve_checkpoint(p: str) -> Path:
+def _resolve_checkpoint(p: str, mode: Literal["accurate", "fast"] = "accurate") -> Path:
     """Resolve checkpoint locally first, else download from HF model repo."""
     path = Path(p)
     if path.is_absolute() and path.exists():
         return path
-    for candidate in (NOTEBOOKS_DIR / p, RESULTS_DIR / Path(p).name):
+    for candidate in (
+        NOTEBOOKS_DIR / p,
+        RESULTS_DIR / Path(p).name,
+        RESULTS_DIR / "fast_model" / Path(p).name,
+    ):
         if candidate.exists():
             return candidate
     # In model repos we usually store files flat, so try both raw entry and basename.
     tried = [p]
     if Path(p).name != p:
         tried.append(Path(p).name)
+    if mode == "fast":
+        tried.extend([f"fast/{Path(p).name}", f"fast_model/{Path(p).name}"])
     for name in tried:
         try:
             downloaded = _hf_download(name)
@@ -366,28 +436,30 @@ def _resolve_checkpoint(p: str) -> Path:
     )
 
 
-def _load_ensemble() -> List[nn.Module]:
+def _load_ensemble(mode: Literal["accurate", "fast"] = "accurate") -> tuple[List[nn.Module], list[str]]:
     # Align CFG so build_model() reads the right backbone/size internally.
     CFG.backbone = BACKBONE
     CFG.img_size = IMG_SIZE
 
     try:
-        manifest = _resolve_manifest_path()
+        manifest = _resolve_manifest_path(mode)
         df = pd.read_csv(manifest)
-        checkpoint_paths = [_resolve_checkpoint(p) for p in df["checkpoint"].tolist()]
+        checkpoint_paths = [_resolve_checkpoint(p, mode=mode) for p in df["checkpoint"].tolist()]
         log.info(
-            "Loading ensemble of %d models from %s",
+            "Loading %s ensemble of %d models from %s",
+            mode,
             len(checkpoint_paths),
             manifest,
         )
     except Exception:
-        best = RESULTS_DIR / "best_model.pth"
+        fallback_name = "fast_best_model.pth" if mode == "fast" else "best_model.pth"
+        best = RESULTS_DIR / fallback_name
         if best.exists():
             checkpoint_paths = [best]
-            log.info("No manifest found, falling back to local checkpoint: %s", best.name)
+            log.info("No %s manifest found, falling back to local checkpoint: %s", mode, best.name)
         else:
-            checkpoint_paths = [_resolve_checkpoint("best_model.pth")]
-            log.info("No manifest found, falling back to HF checkpoint: best_model.pth")
+            checkpoint_paths = [_resolve_checkpoint(fallback_name, mode=mode)]
+            log.info("No %s manifest found, falling back to HF checkpoint: %s", mode, fallback_name)
 
     models: list[nn.Module] = []
     for ckpt_path in checkpoint_paths:
@@ -408,13 +480,15 @@ def _load_ensemble() -> List[nn.Module]:
         model.to(DEVICE).eval()
         models.append(model)
 
+    loaded_checkpoints = [p.name for p in checkpoint_paths]
+    mode_thr = FAST_DECISION_THRESHOLD if mode == "fast" else DECISION_THRESHOLD
     log.info(
-        "Ensemble ready — %d model(s) · device=%s · backbone=%s (detected=%s) · "
+        "%s ensemble ready — %d model(s) · device=%s · backbone=%s (detected=%s) · "
         "normalize=%s · img_size=%d · tta=%s · threshold=%.4f",
-        len(models), DEVICE, BACKBONE, _DETECTED_BACKBONE,
-        _normalize_fn.__name__, IMG_SIZE, USE_TTA, DECISION_THRESHOLD,
+        mode, len(models), DEVICE, BACKBONE, _DETECTED_BACKBONE,
+        _normalize_fn.__name__, IMG_SIZE, USE_TTA, mode_thr,
     )
-    return models
+    return models, loaded_checkpoints
 
 
 # ---------------------------------------------------------------------------
@@ -433,18 +507,19 @@ app.add_middleware(
 
 _ensemble: list[nn.Module] = []
 _loaded_checkpoints: list[str] = []
+_fast_ensemble: list[nn.Module] = []
+_fast_loaded_checkpoints: list[str] = []
 
 
 @app.on_event("startup")
 def _startup() -> None:
-    global _ensemble, _loaded_checkpoints
+    global _ensemble, _loaded_checkpoints, _fast_ensemble, _fast_loaded_checkpoints
+    _ensemble, _loaded_checkpoints = _load_ensemble("accurate")
     try:
-        manifest = _resolve_manifest_path()
-        df = pd.read_csv(manifest)
-        _loaded_checkpoints = [Path(p).name for p in df["checkpoint"].tolist()]
-    except Exception:
-        _loaded_checkpoints = ["best_model.pth"]
-    _ensemble = _load_ensemble()
+        _fast_ensemble, _fast_loaded_checkpoints = _load_ensemble("fast")
+    except Exception:  # noqa: BLE001
+        log.warning("Fast ensemble unavailable; using accurate ensemble for fast mode fallback.")
+        _fast_ensemble, _fast_loaded_checkpoints = _ensemble, _loaded_checkpoints
 
 
 @app.get("/health")
@@ -460,6 +535,9 @@ def health() -> dict:
         "device": str(DEVICE),
         "use_tta": USE_TTA,
         "threshold": DECISION_THRESHOLD,
+        "fast_models": len(_fast_ensemble),
+        "fast_checkpoints": _fast_loaded_checkpoints,
+        "fast_threshold": FAST_DECISION_THRESHOLD,
     }
 
 
@@ -467,6 +545,8 @@ def health() -> dict:
 def _predict_probability_detailed(
     pil_gray: Image.Image,
     use_tta: bool,
+    ensemble: list[nn.Module],
+    checkpoints: list[str],
     max_models: int | None = None,
 ) -> dict:
     """Run ensemble (+ optional TTA) on a single PIL image.
@@ -481,9 +561,9 @@ def _predict_probability_detailed(
     tensors = [_normalize_fn(pipeline(pil_gray)) for pipeline in pipelines]
     batch = torch.stack(tensors, dim=0).to(DEVICE)  # (num_tta, 3, H, W)
 
-    active_model_count = len(_ensemble) if max_models is None else max(1, min(max_models, len(_ensemble)))
-    active_models = _ensemble[:active_model_count]
-    active_checkpoints = _loaded_checkpoints[:active_model_count]
+    active_model_count = len(ensemble) if max_models is None else max(1, min(max_models, len(ensemble)))
+    active_models = ensemble[:active_model_count]
+    active_checkpoints = checkpoints[:active_model_count]
 
     per_model_tta_logits: list[np.ndarray] = []
     per_model_mean_logit: list[float] = []
@@ -513,6 +593,7 @@ def _predict_probability_detailed(
 @app.post("/predict")
 async def predict(
     image: UploadFile = File(...),
+    mode: Literal["accurate", "fast"] = Query(default="accurate", description="Inference mode"),
     use_tta: bool | None = Query(default=None, description="Override TTA for this request."),
     max_models: int | None = Query(default=None, ge=1, description="Use only first N models for speed."),
 ) -> dict:
@@ -528,12 +609,18 @@ async def predict(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"Could not decode image: {exc}") from exc
 
-    effective_use_tta = USE_TTA if use_tta is None else use_tta
+    selected_ensemble = _fast_ensemble if mode == "fast" else _ensemble
+    selected_checkpoints = _fast_loaded_checkpoints if mode == "fast" else _loaded_checkpoints
+    if not selected_ensemble:
+        raise HTTPException(status_code=503, detail=f"{mode} model not ready")
+    effective_use_tta = (False if mode == "fast" else USE_TTA) if use_tta is None else use_tta
 
     try:
         details = _predict_probability_detailed(
             pil,
             use_tta=effective_use_tta,
+            ensemble=selected_ensemble,
+            checkpoints=selected_checkpoints,
             max_models=max_models,
         )
     except Exception as exc:  # noqa: BLE001
@@ -541,14 +628,15 @@ async def predict(
         raise HTTPException(status_code=500, detail=f"Inference error: {exc}") from exc
 
     probability = details["probability"]
-    is_positive = probability >= DECISION_THRESHOLD
+    active_threshold = FAST_DECISION_THRESHOLD if mode == "fast" else DECISION_THRESHOLD
+    is_positive = probability >= active_threshold
 
     log.info(
         "/predict  file=%s  size=%d  prob=%.4f  thr=%.4f  -> %s  (per-model=%s, tta=%d)",
         image.filename,
         len(raw),
         probability,
-        DECISION_THRESHOLD,
+        active_threshold,
         "Cardiomegaly" if is_positive else "Negative",
         {k: round(v, 4) for k, v in details["per_model_mean_logit"].items()},
         details["num_tta_passes"],
@@ -560,10 +648,11 @@ async def predict(
         "confidence": probability,
         "heatmap_url": None,
         "source": "model",
-        "threshold": DECISION_THRESHOLD,
+        "threshold": active_threshold,
         "ensemble_size": details["models_used"],
         "use_tta": effective_use_tta,
         "checkpoints": details["checkpoints_used"],
+        "mode": mode,
     }
 
 
@@ -583,7 +672,12 @@ async def debug_predict(image: UploadFile = File(...)) -> dict:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"Could not decode image: {exc}") from exc
 
-    details = _predict_probability_detailed(pil, use_tta=USE_TTA)
+    details = _predict_probability_detailed(
+        pil,
+        use_tta=USE_TTA,
+        ensemble=_ensemble,
+        checkpoints=_loaded_checkpoints,
+    )
     details["prediction"] = (
         POSITIVE_LABEL if details["probability"] >= DECISION_THRESHOLD else NEGATIVE_LABEL
     )

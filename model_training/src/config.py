@@ -20,7 +20,7 @@ class Config:
     seed: int = 42
 
     # ── Image / DataLoader ───────────────────────────────────────────────
-    img_size:    int = 224   # torchxrayvision DenseNet-121 native resolution
+    img_size:    int = 300   # torchxrayvision DenseNet-121 native resolution
     batch_size:  int = 32
     num_workers: int = 4
 
@@ -72,7 +72,7 @@ class Config:
     # mobilenet_v3_large — torchvision MobileNetV3-Large, pretrained on ImageNet (faster, lighter)
     # efficientnet_b0    — torchvision EfficientNet-B0,  pretrained on ImageNet (good accuracy/size trade-off)
     # efficientnet_b3    — torchvision EfficientNet-B3,  pretrained on ImageNet (higher accuracy, more params)
-    backbone: str = "efficientnet_b0"
+    backbone: str = "rad-dino"
 
     # ── Ensemble ─────────────────────────────────────────────────────────
     # True:  train one model per entry in `seeds` and average predictions

@@ -3,6 +3,7 @@ import { resolvePredictApiBaseUrl } from "@/lib/predict-api-url";
 import type { PredictApiResponse } from "@/types/prediction";
 
 export type PredictionRequestOptions = {
+  mode?: "accurate" | "fast";
   useTta?: boolean;
   maxModels?: number;
 };
@@ -39,9 +40,10 @@ export async function requestPrediction(
     headers: { ...PREDICT_DEFAULT_HEADERS, "Content-Type": "multipart/form-data" },
     timeout: 60000,
     params:
-      options.useTta === undefined && options.maxModels === undefined
+      options.mode === undefined && options.useTta === undefined && options.maxModels === undefined
         ? undefined
         : {
+            ...(options.mode === undefined ? {} : { mode: options.mode }),
             ...(options.useTta === undefined ? {} : { use_tta: options.useTta }),
             ...(options.maxModels === undefined ? {} : { max_models: options.maxModels }),
           },
