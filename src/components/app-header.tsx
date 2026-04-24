@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/use-auth";
 import { useTheme } from "@/hooks/use-theme";
 import { supabase } from "@/integrations/supabase/client";
+import logoUrl from "@/assets/logo.png";
 
 export function AppHeader() {
   const { user } = useAuth();
@@ -25,12 +26,11 @@ export function AppHeader() {
     <header className="sticky top-0 z-40 w-full border-b border-border/60 bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
         <Link to="/" className="flex items-center gap-2.5 group">
-          <span
-            className="flex h-9 w-9 items-center justify-center rounded-lg text-primary-foreground shadow-[var(--shadow-elegant)] transition-transform group-hover:scale-105"
-            style={{ background: "var(--gradient-primary)" }}
-          >
-            <Activity className="h-5 w-5" strokeWidth={2.5} />
-          </span>
+          <img
+            src={logoUrl}
+            alt="Coraçai logo"
+            className="h-9 w-9 rounded-lg object-cover shadow-[var(--shadow-elegant)] transition-transform group-hover:scale-105"
+          />
           <div className="flex flex-col leading-tight">
             <span className="text-sm font-semibold tracking-tight">Coraçai</span>
             <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
