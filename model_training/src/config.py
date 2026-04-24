@@ -25,9 +25,8 @@ class Config:
     num_workers: int = 4
 
     # ── Train / val / test split (stratified; disjoint image rows) ───────
-    # Larger test_size = more reliable test metrics, less data for training.
-    val_size:  float = 0.15
-    test_size: float = 0.25
+    val_size:  float = 0.20
+    test_size: float = 0.15
 
     # ── Training schedule (two-stage) ────────────────────────────────────
     frozen_epochs:   int = 3       # stage 1: head-only warmup
