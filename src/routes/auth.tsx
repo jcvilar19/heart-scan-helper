@@ -1,6 +1,7 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Activity } from "lucide-react";
+import logoUrl from "@/assets/logo.png";
 import { toast } from "sonner";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
@@ -103,12 +104,11 @@ function AuthPage() {
     >
       <div className="w-full max-w-md">
         <Link to="/" className="mb-6 flex items-center justify-center gap-2.5">
-          <span
-            className="flex h-10 w-10 items-center justify-center rounded-lg text-primary-foreground shadow-[var(--shadow-elegant)]"
-            style={{ background: "var(--gradient-primary)" }}
-          >
-            <Activity className="h-5 w-5" strokeWidth={2.5} />
-          </span>
+          <img
+            src={logoUrl}
+            alt="Coraçai logo"
+            className="h-10 w-10 rounded-lg object-cover shadow-[var(--shadow-elegant)]"
+          />
           <span className="text-lg font-semibold tracking-tight">Coraçai</span>
         </Link>
 
